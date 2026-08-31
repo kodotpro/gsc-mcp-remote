@@ -28,7 +28,8 @@ import { generateReport } from "./tools/generate-report.js";
 import { multiSiteDashboard } from "./tools/multi-site-dashboard.js";
 import { submitUrl, submitBatch } from "./tools/submit-url.js";
 import { submitSitemap, listSitemaps } from "./tools/submit-sitemap.js";
-// v2.3 image SEO tools — paired with the Image SEO post on suganthan.com.
+// Image-search tools: they pass type=image to the Search Analytics API, a
+// surface most third-party SEO tools never expose because they default to web.
 import { imageKeywordOverview } from "./tools/image-keyword-overview.js";
 import { imageSearchQuickWins } from "./tools/image-search-quick-wins.js";
 import { compareWebVsImage } from "./tools/compare-web-vs-image.js";
@@ -465,12 +466,12 @@ function registerTools(server: McpServer): void {
   );
 
   // ---------------------------------------------------------------------------
-  // v2.3 IMAGE SEO TOOLS
+  // IMAGE SEARCH TOOLS
   //
-  // These tools all pass type=image to the GSC Search Analytics API, which most
-  // third-party tools never expose. Paired with the Image SEO technical guide
-  // on suganthan.com (link in README). All 7 reuse the existing fetchAllRows
-  // plumbing; the only meaningfully new logic is the join in compare_web_vs_image.
+  // These all pass type=image to the Search Analytics API, a surface most
+  // third-party tools never expose because they default to type=web. All 7
+  // reuse the existing fetchAllRows plumbing; the only meaningfully new logic
+  // is the join in compare_web_vs_image.
   // ---------------------------------------------------------------------------
 
   // 21. Image Keyword Overview

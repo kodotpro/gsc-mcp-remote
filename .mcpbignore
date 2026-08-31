@@ -1,13 +1,16 @@
 # Keep the desktop bundle to runtime files only:
 # dist/, production node_modules, package.json, manifest.json, LICENSE, NOTICE
 src/
-screenshots/
-demo-mock/
+scripts/
 docs/
-article.md
-README-v2.3-DRAFT.md
-gsc-mcp-build-spec.md
-probe-platform-properties.mjs
+data/
+secrets/
+.github/
+Dockerfile
+docker-compose.yml
+.dockerignore
+.env
+.env.example
 tsconfig.json
 package-lock.json
 .gitignore

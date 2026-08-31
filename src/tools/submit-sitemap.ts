@@ -68,7 +68,7 @@ export async function submitSitemap(sitemapUrl?: string, siteUrlOverride?: strin
       success: false,
       error:
         "Sitemap submission needs full access, but this install is in read only mode (GSC_SCOPES=readonly). " +
-        "Re-run `npx gsc-mcp-remote setup --reauth` and choose full access, then try again.",
+        "Re-run `node dist/index.js setup --reauth` and choose full access, then try again.",
     };
   }
 

@@ -1,30 +1,38 @@
 # Scope justifications for the verification form
 
-Paste ready. Keep the app description consistent with the consent screen name and the privacy page.
+> **Status: preparation only.** Finalise once per-user OAuth ships and the hosted deployment is live. Keep the app description consistent with the consent screen name and the privacy policy page — reviewers cross-check them.
 
 ## App description (used across the form)
 
-Suganthan's GSC MCP is a free, open source MCP (Model Context Protocol) server that runs entirely on the user's own computer. It lets the user's AI assistant (such as Claude) answer questions about the user's own Google Search Console data: quick win keywords, traffic drops, content decay, cannibalisation, CTR benchmarks, image search performance, and similar analyses. The software is a local command line process. It has no backend: the developer operates no servers, receives no user data, and stores nothing. OAuth tokens are cached only on the user's machine, and every API call goes directly from the user's machine to Google's APIs. Source code: https://github.com/Suganthan-Mohanadasan/Suganthans-GSC-MCP
+gsc-mcp-remote is an open-source MCP (Model Context Protocol) server that lets a user's AI assistant answer questions about the user's own Google Search Console data: quick-win keywords, traffic drops, content decay, keyword cannibalisation, CTR benchmarks, image-search performance, and similar analyses.
 
-By default the app requests only the read only scope. The two write scopes are requested solely when the user explicitly selects the full access option during setup, which enables the sitemap submission and URL submission features.
+It can be self-hosted by the user, and is also offered as a hosted instance. In the hosted case each user signs in with their own Google account, and the server acts only on that user's behalf: Google's own Search Console property permissions decide what each user can see, and the service grants no access of its own.
+
+Data handling in the hosted deployment: the user's Google refresh token is stored server-side, encrypted at rest, and used solely to call Google's Search Console API in response to a request that user made. Search Console responses are returned to the requesting user and not retained afterwards. Tokens are deleted when the user disconnects. No Google user data is sold, used for advertising, or used to train models, and none is shared with third parties.
+
+Source code: https://github.com/kodotpro/gsc-mcp-remote
+
+The hosted service requests **only the read-only scope**. It cannot modify anything in a user's Search Console account.
 
 ## https://www.googleapis.com/auth/webmasters.readonly
 
-Requested by default for every user. Powers all 25 read only analysis tools: search analytics queries (Search Console `searchanalytics.query`) for keyword, page, device, country, and image search reports; `sites.list` to let the user choose which verified property to analyse; `sitemaps.list` to report sitemap status; and the URL Inspection API (`urlInspection.index.inspect`) to check whether specific pages are indexed. Data is fetched on demand in response to a question the user asks their AI assistant, displayed to the user, and not stored by the app beyond the current response.
+The only scope requested. It powers every tool in the hosted service:
 
-## https://www.googleapis.com/auth/webmasters
+- **Search analytics** (`searchanalytics.query`) — keyword, page, device, country and image-search reports, which are the substance of every analysis tool
+- **`sites.list`** — so the user can see and choose which of their own verified properties to analyse. Without it the assistant cannot tell the user what is available and the user must type exact property identifiers by hand
+- **`sitemaps.list`** — to report sitemap status, errors and indexed counts
+- **URL Inspection** (`urlInspection.index.inspect`) — to answer whether a specific page of the user's own site is indexed, and if not, why
 
-Requested only when the user chooses full access during setup. Required by exactly one feature pair: `submit_sitemap`, which calls `sitemaps.submit` so the user can submit or resubmit their own sitemap from the assistant, and richer sitemap management the readonly scope does not permit. The action is always user initiated for the user's own verified property. Nothing is stored.
+Every call is made on demand, in direct response to a question the user asked their assistant, and the result is returned to that user.
 
-## https://www.googleapis.com/auth/indexing
+## Why a narrower scope is insufficient
 
-Requested only when the user chooses full access during setup. Required by the `submit_url` and `submit_batch` features, which call the Web Search Indexing API's `urlNotifications.publish` so the user can notify Google about new or updated URLs on their own verified sites. The action is always explicit and user initiated. Nothing is stored.
+There is no narrower Search Console scope. `webmasters.readonly` is already the minimum-privilege option: it is read-only and cannot submit sitemaps, request indexing, or change any setting. The two write scopes (`webmasters`, `indexing`) exist in the codebase for self-hosted users who opt into them locally, and are deliberately **not** requested by the hosted service.
 
-## Why narrower scopes are insufficient
+## Limited Use statement (also on the privacy policy page)
 
-- The readonly scope cannot call `sitemaps.submit` or the Indexing API, so the two write scopes are the minimum for the submission features.
-- The write scopes are not requested by default; users on the read only tier never see them on a consent screen.
+The app's use and transfer of information received from Google APIs adheres to the [Google API Services User Data Policy](https://developers.google.com/terms/api-services-user-data-policy), including the Limited Use requirements.
 
-## Limited Use statement (also on the privacy page)
+Specifically: Google user data is used only to provide the features the user requested; it is not transferred to third parties except as necessary to provide those features, to comply with applicable law, or as part of a merger or acquisition with user notice; it is not used for advertising; it is not used to train generalised machine-learning models; and no humans read it except with the user's explicit consent, for security purposes, to comply with applicable law, or where the data has been aggregated and anonymised.
 
-The app's use and transfer of information received from Google APIs adheres to the Google API Services User Data Policy, including the Limited Use requirements. In practice the app exceeds those requirements: Google user data is processed only on the user's own device, is never transmitted to the developer or any third party by the app, is never used for advertising, and is never stored beyond the local OAuth token cache the user can delete at any time.
+Stored data is limited to the OAuth refresh token needed to keep the connection working, held encrypted at rest and deleted when the user disconnects.

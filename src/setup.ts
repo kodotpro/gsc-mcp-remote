@@ -1,5 +1,5 @@
 /**
- * `npx gsc-mcp-remote setup`
+ * `node dist/index.js setup`
  *
  * Guided setup: authenticates with Google, verifies API access with a live
  * sites.list call, then writes the MCP entry into Claude Desktop and/or
@@ -37,7 +37,7 @@ interface SetupOptions {
 }
 
 const USAGE = `
-Usage: npx gsc-mcp-remote setup [options]
+Usage: node dist/index.js setup [options]
 
 Guided setup for the GSC MCP server. Signs you in with Google, checks the
 connection works, and writes the config for Claude Desktop or Claude Code.
@@ -166,10 +166,21 @@ function buildEnv(opts: { scopes: ScopeTier; site: string; secretsPath: string |
   return env;
 }
 
+/**
+ * Absolute path to this checkout's compiled entry point.
+ *
+ * This project is installed by cloning, not from npm, so the config must point
+ * at the built file on disk. Derived from this module's own location
+ * (dist/setup.js -> dist/index.js) so it stays correct wherever the repo lives.
+ */
+function serverEntryPoint(): string {
+  return path.join(__dirname, "index.js");
+}
+
 function serverEntry(env: Record<string, string>) {
   return {
-    command: "npx",
-    args: ["-y", "gsc-mcp-remote"],
+    command: "node",
+    args: [serverEntryPoint()],
     env,
   };
 }
@@ -234,7 +245,7 @@ function writeCodeConfig(env: Record<string, string>, force: boolean, dryRun: bo
   for (const [k, v] of Object.entries(env)) {
     envFlags.push("-e", `${k}=${v}`);
   }
-  const addArgs = ["mcp", "add", "--scope", "user", ...envFlags, "gsc", "--", "npx", "-y", "gsc-mcp-remote"];
+  const addArgs = ["mcp", "add", "--scope", "user", ...envFlags, "gsc", "--", "node", serverEntryPoint()];
   const manualCommand = `claude ${addArgs.map((a) => (a.includes(" ") ? JSON.stringify(a) : a)).join(" ")}`;
 
   if (dryRun) {
@@ -278,7 +289,7 @@ export async function runSetup(argv: string[]): Promise<number> {
     return 0;
   }
 
-  console.log("Suganthan's GSC MCP setup");
+  console.log("gsc-mcp-remote setup");
   console.log("Free, open source, and private. Your data goes straight from this machine to Google.\n");
 
   const prompter = makePrompter(opts.yes);
@@ -303,7 +314,7 @@ export async function runSetup(argv: string[]): Promise<number> {
       console.log("  1. console.cloud.google.com > create a project > enable the Search Console API");
       console.log("  2. Credentials > Create credentials > OAuth client ID > Desktop app");
       console.log("  3. Download the JSON file");
-      console.log("Full walkthrough: https://github.com/Suganthan-Mohanadasan/Suganthans-GSC-MCP#quick-start\n");
+      console.log("Full walkthrough: https://github.com/kodotpro/gsc-mcp-remote#quick-start\n");
       const p = await prompter.ask("Path to your client secrets JSON file: ", "");
       if (!p) {
         console.error("No credentials provided. Re-run setup when you have the JSON file.");
@@ -401,7 +412,7 @@ export async function runSetup(argv: string[]): Promise<number> {
       console.log('  "What are my top image search queries?"');
       console.log(`\nToken lives at ${tokenPath()} and never leaves this machine.`);
       console.log("Revoke access any time at https://myaccount.google.com/permissions");
-      console.log("Change access level later by re-running: npx gsc-mcp-remote setup --reauth");
+      console.log("Change access level later by re-running: node dist/index.js setup --reauth");
     }
     return ok ? 0 : 1;
   } catch (err: any) {

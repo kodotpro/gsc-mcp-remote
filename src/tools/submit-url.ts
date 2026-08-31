@@ -9,7 +9,7 @@ async function getIndexingClient() {
   if (mode === "oauth" && getScopeTier() === "readonly") {
     throw new Error(
       "URL submission needs full access, but this install is in read only mode (GSC_SCOPES=readonly). " +
-      "Re-run `npx gsc-mcp-remote setup --reauth` and choose full access, then try again."
+      "Re-run `node dist/index.js setup --reauth` and choose full access, then try again."
     );
   }
 

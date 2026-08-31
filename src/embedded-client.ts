@@ -14,9 +14,10 @@
  * GSC_OAUTH_CLIENT_SECRET, or GSC_OAUTH_SECRETS_FILE, which always take
  * precedence (see getOAuthConfig in oauth.ts).
  *
- * Both constants stay empty until the public client passes Google's OAuth
- * verification for the Search Console scopes. While they are empty, setup
- * requires a bring-your-own client and says so.
+ * Both constants stay empty until a public client passes Google's OAuth
+ * verification for the Search Console scopes, which are classified sensitive.
+ * While they are empty, setup requires a bring-your-own client and says so.
+ * Verification prep for this project lives in docs/verification/.
  */
 export const EMBEDDED_CLIENT_ID = "";
 export const EMBEDDED_CLIENT_SECRET = "";

@@ -1,7 +1,7 @@
 {
   "name": "gsc-mcp-remote",
   "version": "3.1.0",
-  "description": "Multi-property Google Search Console MCP server. 30 SEO analysis tools — quick wins, traffic drops, content decay, cannibalisation, CTR opportunities, multi-site dashboards, a full image-search suite, and generative-AI conversation-query detection — where every property-scoped tool accepts a site_url, so one server covers a whole Search Console account. Fork of Suganthan Mohanadasan's GSC MCP, heading towards remote multi-user hosting. OAuth and service account support.",
+  "description": "Multi-property Google Search Console MCP server, local or remote. 30 SEO analysis tools — quick wins, traffic drops, content decay, cannibalisation, CTR opportunities, multi-site dashboards, a full image-search suite, and generative-AI conversation-query detection — where every property-scoped tool accepts a site_url, so one server covers a whole Search Console account. Runs over stdio or as a hosted HTTP service. OAuth and service account support.",
   "main": "dist/index.js",
   "bin": {
     "gsc-mcp-remote": "dist/index.js"
