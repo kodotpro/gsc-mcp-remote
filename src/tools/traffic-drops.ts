@@ -11,13 +11,13 @@ interface TrafficDrop {
   diagnosis: string;
 }
 
-export async function trafficDrops(days: number = 28): Promise<TrafficDrop[]> {
+export async function trafficDrops(days: number = 28, siteUrl?: string): Promise<TrafficDrop[]> {
   const current = getDateRange(days);
   const prior = getPriorDateRange(days);
 
   const [currentRows, priorRows] = await Promise.all([
-    fetchAllRows({ startDate: current.startDate, endDate: current.endDate, dimensions: ["page"] }),
-    fetchAllRows({ startDate: prior.startDate, endDate: prior.endDate, dimensions: ["page"] }),
+    fetchAllRows({ startDate: current.startDate, endDate: current.endDate, dimensions: ["page"] }, siteUrl),
+    fetchAllRows({ startDate: prior.startDate, endDate: prior.endDate, dimensions: ["page"] }, siteUrl),
   ]);
 
   const priorMap = new Map<string, { clicks: number; position: number; ctr: number }>();

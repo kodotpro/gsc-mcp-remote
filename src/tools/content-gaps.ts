@@ -10,7 +10,8 @@ interface ContentGap {
 export async function contentGaps(
   days: number = 90,
   minImpressions: number = 50,
-  minPosition: number = 20
+  minPosition: number = 20,
+  siteUrl?: string
 ): Promise<ContentGap[]> {
   const { startDate, endDate } = getDateRange(days);
 
@@ -18,7 +19,7 @@ export async function contentGaps(
     startDate,
     endDate,
     dimensions: ["query"],
-  });
+  }, siteUrl);
 
   const gaps: ContentGap[] = [];
 

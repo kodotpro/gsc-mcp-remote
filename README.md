@@ -1,10 +1,29 @@
-# Google Search Console MCP Server
+# GSC MCP (multi-property)
 
 An MCP server for Google Search Console that lets you ask Claude questions about your search data and get real answers. Not raw API rows. Actual analysis.
 
-29 tools. OAuth or service account. Free and open source. Runs on your machine: your data goes straight from this computer to Google, and nothing passes through anyone else's servers.
+30 tools, **all of them able to target any property in your account**. OAuth or service account. Free and open source. Runs on your machine: your data goes straight from this computer to Google, and nothing passes through anyone else's servers.
 
-> **Full setup guide with screenshots:** [suganthan.com/blog/google-search-console-mcp-server/](https://suganthan.com/blog/google-search-console-mcp-server/)
+---
+
+## About this fork
+
+This is a **modified fork** of [Suganthan Mohanadasan's GSC MCP](https://github.com/Suganthan-Mohanadasan/Suganthans-GSC-MCP) (Apache-2.0). All the analysis work is his; see [NOTICE](NOTICE) for attribution. It is not affiliated with or endorsed by the original author. Please report problems with this fork at [kodotpro/gsc-mcp-remote/issues](https://github.com/kodotpro/gsc-mcp-remote/issues) rather than upstream.
+
+**What changed in v3.0.0 — multi-property support.** Upstream pinned most tools to a single `GSC_SITE_URL`, so covering an account with several properties meant running one server process per property. Of its 29 tools, 9 accepted a `site_url` override (the newer image-search and `advanced_search_analytics` tools) and the original web-analysis suite never got it. This fork closes that gap:
+
+- **`site_url` on every property-scoped tool** — 16 tools gained it, including `quick_wins`, `traffic_drops`, `content_decay`, `cannibalization_check`, `site_snapshot`, `check_alerts`, `ctr_opportunities`, `ctr_vs_benchmark`, `content_gaps`, `topic_cluster_performance`, `verify_claim`, `inspect_url`, `list_sitemaps`, `submit_sitemap`, and the two composite tools below. Omit it and you get the configured default, exactly as before — nothing about existing single-property setups changes.
+- **`list_properties`** (new tool) — asks Google which properties your credential can actually see, with permission level and type. Upstream called `sites.list` only inside the interactive setup wizard, so at runtime Claude had no way to discover properties; it had to be told the exact strings, which are easy to get wrong (`sc-domain:example.com` vs `https://example.com/`).
+- **The composite tools thread the property through their callees.** `generate_report` and `content_recommendations` each call several other tools internally, so a `site_url` on the signature alone would have left the sub-analyses reporting on the default property. Both now pass it down.
+- **The resolved property is reported back** in every tool's `_meta.parameters.site_url`, so an answer can never quietly be about a different property than you meant.
+- **A configured default is now optional.** If callers always pass `site_url`, the server needs no `GSC_SITE_URL` at all — which is what allows one process to serve a whole account, and later many users.
+
+This corresponds to upstream [issue #9](https://github.com/Suganthan-Mohanadasan/Suganthans-GSC-MCP/issues/9). Next planned step is a remote, multi-user deployment (per-user Google sign-in over Streamable HTTP); until then this runs locally over stdio exactly like upstream.
+
+> **Original project's setup guide with screenshots** (still accurate for auth):
+> [suganthan.com/blog/google-search-console-mcp-server/](https://suganthan.com/blog/google-search-console-mcp-server/)
+
+---
 
 > **v2.5.0 update (August 2026):** new tool `image_page_audit` closes the image SEO loop. The v2.3 suite tells you which pages fail in image search; this one fetches those pages from your own site and tells you why: alt text, filenames, dimension attributes, lazy loading on the LCP image, formats and weights, the ~250x200 indexing minimum, ImageObject/licensable schema, max-image-preview, and the metadata inside the image files (camera EXIF to strip, IPTC to keep, DigitalSourceType on AI images). It only ever fetches the URLs you give it. Launch post with the whole 8-tool workflow on real client data: ["One Page Earned 102,657 Image Impressions and 2 Clicks"](https://suganthan.com/blog/gsc-mcp-image-seo-tools/).
 
@@ -154,20 +173,29 @@ To use `submit_url`, `submit_batch`, and `submit_sitemap`:
 
 Note: Google officially says the Indexing API is for JobPosting and BroadcastEvent schema types. In practice, it processes requests for all page types.
 
-### Multi-site
+### Multi-property
 
-For multiple properties, add `GSC_SITE_URLS`:
+**One server covers your whole account.** Every property-scoped tool takes an optional `site_url`, so you never need to edit config or run a second process to look at another property. Just name it:
+
+> "Compare quick wins for sc-domain:primarysite.com and sc-domain:secondsite.com"
+>
+> "What properties do I have?" → then "run content decay on the second one"
+
+`GSC_SITE_URL` is now **optional**, and sets only the fallback used when a tool is called without `site_url`:
 
 ```json
 "env": {
-  "GSC_SITE_URL": "sc-domain:primarysite.com",
-  "GSC_SITE_URLS": "sc-domain:primarysite.com,sc-domain:secondsite.com"
+  "GSC_SITE_URL": "sc-domain:primarysite.com"
 }
 ```
 
-You can also point a single query at any property your credentials can see without touching the config: `advanced_search_analytics`, `genai_conversation_queries`, and all 7 image-search analysis tools take an optional `site_url` parameter. "Which pages get image impressions but no clicks on sc-domain:secondsite.com?" just works.
+Ask Claude to list your properties (`list_properties`) to get the exact strings — property identifiers are easy to mistype, and a domain property (`sc-domain:example.com`) is a different property from a URL-prefix one (`https://example.com/`) with different data.
 
-## All 29 tools
+Every response reports the property it used in `_meta.parameters.site_url`, so an answer is never ambiguous about which site it describes.
+
+`GSC_SITE_URLS` (comma-separated) remains available and feeds `multi_site_dashboard`'s default list. Note that in upstream it *looked* like it made every tool multi-property but did not: the pinned tools silently used only the first entry. That is the bug this fork fixes.
+
+## All 30 tools
 
 ### Analysis
 
@@ -188,6 +216,7 @@ You can also point a single query at any property your credentials can see witho
 | `advanced_search_analytics` | Custom queries with flexible dimensions and filters |
 | `generate_report` | Full markdown report saved to disk |
 | `multi_site_dashboard` | Health check across all properties in one command |
+| `list_properties` | Every property your credential can access, with permission level and type (new in this fork) |
 
 ### Image SEO (v2.3 + v2.5)
 
@@ -242,8 +271,8 @@ These tools pass `type=image` to the GSC Search Analytics API, which most third-
 | `GSC_OAUTH_SECRETS_FILE` | OAuth mode | Path to OAuth client secrets JSON |
 | `GSC_OAUTH_CLIENT_ID` | OAuth mode (alt) | OAuth client ID |
 | `GSC_OAUTH_CLIENT_SECRET` | OAuth mode (alt) | OAuth client secret |
-| `GSC_SITE_URL` | Yes | Primary GSC property URL |
-| `GSC_SITE_URLS` | No | Comma-separated list for multi-site |
+| `GSC_SITE_URL` | No | Default GSC property, used only when a tool is called without `site_url`. Optional since v3.0.0: callers that always pass `site_url` need no default |
+| `GSC_SITE_URLS` | No | Comma-separated list; supplies `multi_site_dashboard`'s default set of properties |
 | `GSC_SCOPES` | No | `readonly` or `full` (default: `full`). Read only keeps the Google consent to a single view permission; submission tools then explain how to upgrade |
 
 ## Full guide

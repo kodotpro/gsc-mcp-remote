@@ -1,4 +1,4 @@
-import { getSearchConsoleClient, getConfig } from "./auth.js";
+import { getSearchConsoleClient, resolveSiteUrl } from "./auth.js";
 
 export interface InspectionResult {
   indexed: boolean;
@@ -16,9 +16,9 @@ export interface InspectionResult {
   issues: string[];
 }
 
-export async function inspectUrl(url: string): Promise<InspectionResult> {
+export async function inspectUrl(url: string, siteUrlOverride?: string): Promise<InspectionResult> {
   const client = await getSearchConsoleClient();
-  const { siteUrl } = getConfig();
+  const siteUrl = resolveSiteUrl(siteUrlOverride);
 
   const response = await client.urlInspection.index.inspect({
     requestBody: {

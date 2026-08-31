@@ -1,5 +1,5 @@
 /**
- * `npx suganthan-gsc-mcp setup`
+ * `npx gsc-mcp-remote setup`
  *
  * Guided setup: authenticates with Google, verifies API access with a live
  * sites.list call, then writes the MCP entry into Claude Desktop and/or
@@ -37,7 +37,7 @@ interface SetupOptions {
 }
 
 const USAGE = `
-Usage: npx suganthan-gsc-mcp setup [options]
+Usage: npx gsc-mcp-remote setup [options]
 
 Guided setup for the GSC MCP server. Signs you in with Google, checks the
 connection works, and writes the config for Claude Desktop or Claude Code.
@@ -169,7 +169,7 @@ function buildEnv(opts: { scopes: ScopeTier; site: string; secretsPath: string |
 function serverEntry(env: Record<string, string>) {
   return {
     command: "npx",
-    args: ["-y", "suganthan-gsc-mcp"],
+    args: ["-y", "gsc-mcp-remote"],
     env,
   };
 }
@@ -234,7 +234,7 @@ function writeCodeConfig(env: Record<string, string>, force: boolean, dryRun: bo
   for (const [k, v] of Object.entries(env)) {
     envFlags.push("-e", `${k}=${v}`);
   }
-  const addArgs = ["mcp", "add", "--scope", "user", ...envFlags, "gsc", "--", "npx", "-y", "suganthan-gsc-mcp"];
+  const addArgs = ["mcp", "add", "--scope", "user", ...envFlags, "gsc", "--", "npx", "-y", "gsc-mcp-remote"];
   const manualCommand = `claude ${addArgs.map((a) => (a.includes(" ") ? JSON.stringify(a) : a)).join(" ")}`;
 
   if (dryRun) {
@@ -401,7 +401,7 @@ export async function runSetup(argv: string[]): Promise<number> {
       console.log('  "What are my top image search queries?"');
       console.log(`\nToken lives at ${tokenPath()} and never leaves this machine.`);
       console.log("Revoke access any time at https://myaccount.google.com/permissions");
-      console.log("Change access level later by re-running: npx suganthan-gsc-mcp setup --reauth");
+      console.log("Change access level later by re-running: npx gsc-mcp-remote setup --reauth");
     }
     return ok ? 0 : 1;
   } catch (err: any) {

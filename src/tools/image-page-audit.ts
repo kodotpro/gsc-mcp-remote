@@ -18,7 +18,7 @@ import exifr from "exifr";
  */
 
 const USER_AGENT =
-  "suganthan-gsc-mcp/2.5 image_page_audit (+https://github.com/Suganthan-Mohanadasan/Suganthans-GSC-MCP)";
+  "gsc-mcp-remote/3.0 image_page_audit";
 
 const PAGE_TIMEOUT_MS = 15000;
 const IMAGE_TIMEOUT_MS = 12000;

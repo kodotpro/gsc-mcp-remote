@@ -21,7 +21,8 @@ function expectedCtrAtPosition(pos: number): number {
 export async function quickWins(
   days: number = 28,
   minImpressions: number = 100,
-  maxPosition: number = 15
+  maxPosition: number = 15,
+  siteUrl?: string
 ): Promise<QuickWin[]> {
   const { startDate, endDate } = getDateRange(days);
 
@@ -29,7 +30,7 @@ export async function quickWins(
     startDate,
     endDate,
     dimensions: ["query"],
-  });
+  }, siteUrl);
 
   const wins: QuickWin[] = [];
 

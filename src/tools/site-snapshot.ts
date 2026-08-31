@@ -14,13 +14,13 @@ interface SiteSnapshot {
   };
 }
 
-export async function siteSnapshot(days: number = 28): Promise<SiteSnapshot> {
+export async function siteSnapshot(days: number = 28, siteUrl?: string): Promise<SiteSnapshot> {
   const current = getDateRange(days);
   const prior = getPriorDateRange(days);
 
   const [currentRows, priorRows] = await Promise.all([
-    fetchAllRows({ startDate: current.startDate, endDate: current.endDate, dimensions: ["date"] }),
-    fetchAllRows({ startDate: prior.startDate, endDate: prior.endDate, dimensions: ["date"] }),
+    fetchAllRows({ startDate: current.startDate, endDate: current.endDate, dimensions: ["date"] }, siteUrl),
+    fetchAllRows({ startDate: prior.startDate, endDate: prior.endDate, dimensions: ["date"] }, siteUrl),
   ]);
 
   const sum = (rows: typeof currentRows) => {

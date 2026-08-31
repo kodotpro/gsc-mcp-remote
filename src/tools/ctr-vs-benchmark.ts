@@ -21,7 +21,8 @@ interface CtrBenchmarkResult {
 
 export async function ctrVsBenchmark(
   days: number = 28,
-  minImpressions: number = 200
+  minImpressions: number = 200,
+  siteUrl?: string
 ): Promise<CtrBenchmarkResult[]> {
   const { startDate, endDate } = getDateRange(days);
 
@@ -29,7 +30,7 @@ export async function ctrVsBenchmark(
     startDate,
     endDate,
     dimensions: ["page"],
-  });
+  }, siteUrl);
 
   const results: CtrBenchmarkResult[] = [];
 

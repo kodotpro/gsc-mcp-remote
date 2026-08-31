@@ -30,15 +30,16 @@ export async function checkAlerts(
   days: number = 7,
   positionDropThreshold: number = 20,
   ctrDropThreshold: number = 50,
-  clickDropThreshold: number = 30
+  clickDropThreshold: number = 30,
+  siteUrl?: string
 ): Promise<AlertResult> {
   const current = getDateRange(days);
   const prior = getPriorDateRange(days);
 
   // Fetch query+page level data for both periods
   const [currentRows, priorRows] = await Promise.all([
-    fetchAllRows({ startDate: current.startDate, endDate: current.endDate, dimensions: ["query", "page"] }),
-    fetchAllRows({ startDate: prior.startDate, endDate: prior.endDate, dimensions: ["query", "page"] }),
+    fetchAllRows({ startDate: current.startDate, endDate: current.endDate, dimensions: ["query", "page"] }, siteUrl),
+    fetchAllRows({ startDate: prior.startDate, endDate: prior.endDate, dimensions: ["query", "page"] }, siteUrl),
   ]);
 
   // Build prior period lookup: key = "query|||page"

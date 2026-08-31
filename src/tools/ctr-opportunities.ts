@@ -21,7 +21,8 @@ interface CtrOpportunity {
 
 export async function ctrOpportunities(
   days: number = 28,
-  minImpressions: number = 500
+  minImpressions: number = 500,
+  siteUrl?: string
 ): Promise<CtrOpportunity[]> {
   const { startDate, endDate } = getDateRange(days);
 
@@ -29,7 +30,7 @@ export async function ctrOpportunities(
     startDate,
     endDate,
     dimensions: ["page"],
-  });
+  }, siteUrl);
 
   const opportunities: CtrOpportunity[] = [];
 

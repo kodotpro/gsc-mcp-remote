@@ -1,32 +1,38 @@
 {
-  "name": "suganthan-gsc-mcp",
-  "version": "2.5.1",
-  "description": "Google Search Console MCP server for Claude. 28 SEO analysis tools including quick wins, traffic drops, content decay, cannibalisation, CTR opportunities, multi-site dashboards, and a full image-search suite (image keyword overview, image quick wins, web vs image comparison, image pages overview, image keyword trends, image impressions-no-clicks, image content decay). Generative AI conversation-query detection (v2.4). OAuth and service account support.",
+  "name": "gsc-mcp-remote",
+  "version": "3.0.0",
+  "description": "Multi-property Google Search Console MCP server. 30 SEO analysis tools — quick wins, traffic drops, content decay, cannibalisation, CTR opportunities, multi-site dashboards, a full image-search suite, and generative-AI conversation-query detection — where every property-scoped tool accepts a site_url, so one server covers a whole Search Console account. Fork of Suganthan Mohanadasan's GSC MCP, heading towards remote multi-user hosting. OAuth and service account support.",
   "main": "dist/index.js",
   "bin": {
-    "suganthan-gsc-mcp": "dist/index.js"
+    "gsc-mcp-remote": "dist/index.js"
   },
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/Suganthan-Mohanadasan/Suganthans-GSC-MCP.git"
+    "url": "git+https://github.com/kodotpro/gsc-mcp-remote.git"
   },
-  "homepage": "https://suganthan.com/blog/google-search-console-mcp-server/",
+  "homepage": "https://github.com/kodotpro/gsc-mcp-remote#readme",
   "bugs": {
-    "url": "https://github.com/Suganthan-Mohanadasan/Suganthans-GSC-MCP/issues"
+    "url": "https://github.com/kodotpro/gsc-mcp-remote/issues"
   },
   "scripts": {
     "build": "tsc",
     "start": "node dist/index.js",
-    "dev": "tsc --watch"
+    "dev": "tsc --watch",
+    "typecheck": "tsc --noEmit"
   },
   "keywords": [
     "mcp",
     "google-search-console",
     "seo",
     "claude",
-    "gsc"
+    "gsc",
+    "multi-property",
+    "remote-mcp"
   ],
-  "author": "Suganthan Mohanadasan",
+  "author": "Oleksii Khoroshun",
+  "contributors": [
+    "Suganthan Mohanadasan (original author, https://suganthan.com)"
+  ],
   "license": "Apache-2.0",
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.12.1",
@@ -43,7 +49,8 @@
   },
   "files": [
     "dist",
-    "README.md"
+    "README.md",
+    "NOTICE"
   ],
   "engines": {
     "node": ">=18"

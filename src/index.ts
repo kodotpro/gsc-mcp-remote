@@ -38,11 +38,31 @@ import { genaiConversationQueries } from "./tools/genai-conversation-queries.js"
 // v2.5: the bridge from "which pages fail in image search" to "why". Fetches
 // the user's own pages and audits the on-page image factors.
 import { imagePageAudit } from "./tools/image-page-audit.js";
+// Multi-property: property discovery at runtime, and one resolution point so
+// every tool reports which property it actually used.
+import { listProperties } from "./tools/list-properties.js";
+import { resolveSiteUrl } from "./auth.js";
 
 const server = new McpServer({
   name: "gsc-mcp",
-  version: "2.5.1",
+  version: "3.0.0",
 });
+
+/**
+ * The optional property selector shared by every property-scoped tool.
+ *
+ * Upstream shipped this on the 9 newer image/advanced tools but never
+ * backfilled the original web-analysis suite, so one server process could only
+ * ever report on GSC_SITE_URL. Every tool now accepts it, which is what lets a
+ * single server cover a whole account.
+ */
+const SITE_URL_PARAM = z
+  .string()
+  .optional()
+  .describe(
+    "Search Console property to analyse, e.g. sc-domain:example.com or https://www.example.com/. " +
+    "Defaults to the configured property. Call list_properties to see what this account can access."
+  );
 
 // 1. Quick Wins
 server.tool(
@@ -52,10 +72,12 @@ server.tool(
     days: z.number().default(28).describe("Number of days to analyse"),
     min_impressions: z.number().default(100).describe("Minimum impressions threshold"),
     max_position: z.number().default(15).describe("Maximum position to include"),
+    site_url: SITE_URL_PARAM,
   },
-  async ({ days, min_impressions, max_position }) => {
-    const results = await quickWins(days, min_impressions, max_position);
-    const wrapped = withMeta(results, "quick_wins", { days, min_impressions, max_position });
+  async ({ days, min_impressions, max_position, site_url }) => {
+    const property = resolveSiteUrl(site_url);
+    const results = await quickWins(days, min_impressions, max_position, property);
+    const wrapped = withMeta(results, "quick_wins", { days, min_impressions, max_position, site_url: property });
     return {
       content: [{ type: "text", text: JSON.stringify(wrapped, null, 2) }],
     };
@@ -69,10 +91,12 @@ server.tool(
   {
     days: z.number().default(28).describe("Number of days to analyse"),
     min_impressions: z.number().default(500).describe("Minimum impressions threshold"),
+    site_url: SITE_URL_PARAM,
   },
-  async ({ days, min_impressions }) => {
-    const results = await ctrOpportunities(days, min_impressions);
-    const wrapped = withMeta(results, "ctr_opportunities", { days, min_impressions });
+  async ({ days, min_impressions, site_url }) => {
+    const property = resolveSiteUrl(site_url);
+    const results = await ctrOpportunities(days, min_impressions, property);
+    const wrapped = withMeta(results, "ctr_opportunities", { days, min_impressions, site_url: property });
     return {
       content: [{ type: "text", text: JSON.stringify(wrapped, null, 2) }],
     };
@@ -85,10 +109,12 @@ server.tool(
   "Find pages that lost the most traffic recently. Compares current period vs prior period and diagnoses whether each drop is a ranking loss, CTR collapse, or demand decline." + GUARDRAIL_SUFFIX + VISUAL_SUFFIX + POSITION_CAVEAT,
   {
     days: z.number().default(28).describe("Number of days per period to compare"),
+    site_url: SITE_URL_PARAM,
   },
-  async ({ days }) => {
-    const results = await trafficDrops(days);
-    const wrapped = withMeta(results, "traffic_drops", { days });
+  async ({ days, site_url }) => {
+    const property = resolveSiteUrl(site_url);
+    const results = await trafficDrops(days, property);
+    const wrapped = withMeta(results, "traffic_drops", { days, site_url: property });
     return {
       content: [{ type: "text", text: JSON.stringify(wrapped, null, 2) }],
     };
@@ -103,10 +129,12 @@ server.tool(
     days: z.number().default(90).describe("Number of days to analyse"),
     min_impressions: z.number().default(50).describe("Minimum impressions threshold"),
     min_position: z.number().default(20).describe("Minimum position (queries ranking worse than this)"),
+    site_url: SITE_URL_PARAM,
   },
-  async ({ days, min_impressions, min_position }) => {
-    const results = await contentGaps(days, min_impressions, min_position);
-    const wrapped = withMeta(results, "content_gaps", { days, min_impressions, min_position });
+  async ({ days, min_impressions, min_position, site_url }) => {
+    const property = resolveSiteUrl(site_url);
+    const results = await contentGaps(days, min_impressions, min_position, property);
+    const wrapped = withMeta(results, "content_gaps", { days, min_impressions, min_position, site_url: property });
     return {
       content: [{ type: "text", text: JSON.stringify(wrapped, null, 2) }],
     };
@@ -119,10 +147,12 @@ server.tool(
   "Get a quick overview of how the site is performing. Returns total clicks, impressions, CTR, and position with a comparison to the prior period." + GUARDRAIL_SUFFIX + VISUAL_SUFFIX + POSITION_CAVEAT,
   {
     days: z.number().default(28).describe("Number of days per period"),
+    site_url: SITE_URL_PARAM,
   },
-  async ({ days }) => {
-    const results = await siteSnapshot(days);
-    const wrapped = withMeta(results, "site_snapshot", { days });
+  async ({ days, site_url }) => {
+    const property = resolveSiteUrl(site_url);
+    const results = await siteSnapshot(days, property);
+    const wrapped = withMeta(results, "site_snapshot", { days, site_url: property });
     return {
       content: [{ type: "text", text: JSON.stringify(wrapped, null, 2) }],
     };
@@ -135,10 +165,12 @@ server.tool(
   "Check if a URL is indexed and why or why not. Returns indexing status, last crawl date, canonical info, robots/noindex issues, and mobile usability in one answer." + GUARDRAIL_SUFFIX + VISUAL_SUFFIX,
   {
     url: z.string().describe("The full URL to inspect"),
+    site_url: SITE_URL_PARAM,
   },
-  async ({ url }) => {
-    const results = await inspectUrlTool(url);
-    const wrapped = withMeta(results, "inspect_url", { url });
+  async ({ url, site_url }) => {
+    const property = resolveSiteUrl(site_url);
+    const results = await inspectUrlTool(url, property);
+    const wrapped = withMeta(results, "inspect_url", { url, site_url: property });
     return {
       content: [{ type: "text", text: JSON.stringify(wrapped, null, 2) }],
     };
@@ -152,10 +184,12 @@ server.tool(
   {
     days: z.number().default(28).describe("Number of days to analyse"),
     min_impressions: z.number().default(50).describe("Minimum combined impressions for a query"),
+    site_url: SITE_URL_PARAM,
   },
-  async ({ days, min_impressions }) => {
-    const results = await cannibalizationCheck(days, min_impressions);
-    const wrapped = withMeta(results, "cannibalization_check", { days, min_impressions });
+  async ({ days, min_impressions, site_url }) => {
+    const property = resolveSiteUrl(site_url);
+    const results = await cannibalizationCheck(days, min_impressions, property);
+    const wrapped = withMeta(results, "cannibalization_check", { days, min_impressions, site_url: property });
     return {
       content: [{ type: "text", text: JSON.stringify(wrapped, null, 2) }],
     };
@@ -166,10 +200,13 @@ server.tool(
 server.tool(
   "content_decay",
   "Find pages that are slowly dying with consistent traffic decline over three consecutive 30-day periods. One bad month is noise; three consecutive bad months is a problem." + GUARDRAIL_SUFFIX + VISUAL_SUFFIX + POSITION_CAVEAT,
-  {},
-  async () => {
-    const results = await contentDecay();
-    const wrapped = withMeta(results, "content_decay", {});
+  {
+    site_url: SITE_URL_PARAM,
+  },
+  async ({ site_url }) => {
+    const property = resolveSiteUrl(site_url);
+    const results = await contentDecay(property);
+    const wrapped = withMeta(results, "content_decay", { site_url: property });
     return {
       content: [{ type: "text", text: JSON.stringify(wrapped, null, 2) }],
     };
@@ -183,10 +220,12 @@ server.tool(
   {
     path_pattern: z.string().describe("URL path pattern to match (e.g. /blog/seo)"),
     days: z.number().default(28).describe("Number of days to analyse"),
+    site_url: SITE_URL_PARAM,
   },
-  async ({ path_pattern, days }) => {
-    const results = await topicClusterPerformance(path_pattern, days);
-    const wrapped = withMeta(results, "topic_cluster_performance", { path_pattern, days });
+  async ({ path_pattern, days, site_url }) => {
+    const property = resolveSiteUrl(site_url);
+    const results = await topicClusterPerformance(path_pattern, days, property);
+    const wrapped = withMeta(results, "topic_cluster_performance", { path_pattern, days, site_url: property });
     return {
       content: [{ type: "text", text: JSON.stringify(wrapped, null, 2) }],
     };
@@ -200,10 +239,12 @@ server.tool(
   {
     days: z.number().default(28).describe("Number of days to analyse"),
     min_impressions: z.number().default(200).describe("Minimum impressions threshold"),
+    site_url: SITE_URL_PARAM,
   },
-  async ({ days, min_impressions }) => {
-    const results = await ctrVsBenchmark(days, min_impressions);
-    const wrapped = withMeta(results, "ctr_vs_benchmark", { days, min_impressions });
+  async ({ days, min_impressions, site_url }) => {
+    const property = resolveSiteUrl(site_url);
+    const results = await ctrVsBenchmark(days, min_impressions, property);
+    const wrapped = withMeta(results, "ctr_vs_benchmark", { days, min_impressions, site_url: property });
     return {
       content: [{ type: "text", text: JSON.stringify(wrapped, null, 2) }],
     };
@@ -221,9 +262,10 @@ server.tool(
     url: z.string().optional().describe("Filter to a specific URL"),
     query: z.string().optional().describe("Filter to a specific search query"),
     days: z.number().default(28).describe("Number of days to check"),
+    site_url: SITE_URL_PARAM,
   },
-  async ({ claim, metric, expected_value, url, query, days }) => {
-    const results = await verifyClaim(claim, metric, expected_value, url, query, days);
+  async ({ claim, metric, expected_value, url, query, days, site_url }) => {
+    const results = await verifyClaim(claim, metric, expected_value, url, query, days, resolveSiteUrl(site_url));
     return {
       content: [{ type: "text", text: JSON.stringify(results, null, 2) }],
     };
@@ -266,10 +308,12 @@ server.tool(
     position_drop_threshold: z.number().default(20).describe("Alert if position drops more than this many spots"),
     ctr_drop_threshold: z.number().default(50).describe("Alert if CTR drops more than this percentage"),
     click_drop_threshold: z.number().default(30).describe("Alert if clicks drop more than this percentage"),
+    site_url: SITE_URL_PARAM,
   },
-  async ({ days, position_drop_threshold, ctr_drop_threshold, click_drop_threshold }) => {
-    const results = await checkAlerts(days, position_drop_threshold, ctr_drop_threshold, click_drop_threshold);
-    const wrapped = withMeta(results, "check_alerts", { days, position_drop_threshold, ctr_drop_threshold, click_drop_threshold });
+  async ({ days, position_drop_threshold, ctr_drop_threshold, click_drop_threshold, site_url }) => {
+    const property = resolveSiteUrl(site_url);
+    const results = await checkAlerts(days, position_drop_threshold, ctr_drop_threshold, click_drop_threshold, property);
+    const wrapped = withMeta(results, "check_alerts", { days, position_drop_threshold, ctr_drop_threshold, click_drop_threshold, site_url: property });
     return {
       content: [{ type: "text", text: JSON.stringify(wrapped, null, 2) }],
     };
@@ -283,10 +327,12 @@ server.tool(
   {
     days: z.number().default(28).describe("Number of days to analyse"),
     max_recommendations: z.number().default(10).describe("Maximum number of recommendations"),
+    site_url: SITE_URL_PARAM,
   },
-  async ({ days, max_recommendations }) => {
-    const results = await contentRecommendations(days, max_recommendations);
-    const wrapped = withMeta(results, "content_recommendations", { days, max_recommendations });
+  async ({ days, max_recommendations, site_url }) => {
+    const property = resolveSiteUrl(site_url);
+    const results = await contentRecommendations(days, max_recommendations, property);
+    const wrapped = withMeta(results, "content_recommendations", { days, max_recommendations, site_url: property });
     return {
       content: [{ type: "text", text: JSON.stringify(wrapped, null, 2) }],
     };
@@ -301,9 +347,10 @@ server.tool(
     output_path: z.string().optional().describe("File path to save the report (default: ./gsc-report-{date}.md)"),
     days: z.number().default(28).describe("Number of days to analyse"),
     include_sections: z.array(z.string()).optional().describe("Sections: snapshot, alerts, quick_wins, traffic_drops, content_decay, recommendations"),
+    site_url: SITE_URL_PARAM,
   },
-  async ({ output_path, days, include_sections }) => {
-    const results = await generateReport(output_path, days, include_sections);
+  async ({ output_path, days, include_sections, site_url }) => {
+    const results = await generateReport(output_path, days, include_sections, resolveSiteUrl(site_url));
     return {
       content: [{ type: "text", text: JSON.stringify(results, null, 2) }],
     };
@@ -365,9 +412,10 @@ server.tool(
   "Notify Google of a new or updated sitemap. Triggers Google to recrawl the sitemap and discover new pages." + GUARDRAIL_SUFFIX,
   {
     sitemap_url: z.string().optional().describe("Full sitemap URL (defaults to {site_url}/sitemap.xml)"),
+    site_url: SITE_URL_PARAM,
   },
-  async ({ sitemap_url }) => {
-    const results = await submitSitemap(sitemap_url);
+  async ({ sitemap_url, site_url }) => {
+    const results = await submitSitemap(sitemap_url, resolveSiteUrl(site_url));
     return {
       content: [{ type: "text", text: JSON.stringify(results, null, 2) }],
     };
@@ -378,10 +426,33 @@ server.tool(
 server.tool(
   "list_sitemaps",
   "List all sitemaps submitted for the site, with status, errors, warnings, and indexed page counts." + GUARDRAIL_SUFFIX,
+  {
+    site_url: SITE_URL_PARAM,
+  },
+  async ({ site_url }) => {
+    const property = resolveSiteUrl(site_url);
+    const results = await listSitemaps(property);
+    const wrapped = withMeta(results, "list_sitemaps", { site_url: property });
+    return {
+      content: [{ type: "text", text: JSON.stringify(wrapped, null, 2) }],
+    };
+  }
+);
+
+// 21. List Properties (multi-property discovery)
+server.tool(
+  "list_properties",
+  "List every Google Search Console property this account can access, with permission level and type (domain vs URL-prefix). Call this first when the user asks about a site you have not been given an exact property string for, or when they ask what sites are available — then pass the exact siteUrl from these results as site_url on any other tool. Also shows which property is the configured default." + GUARDRAIL_SUFFIX,
   {},
   async () => {
-    const results = await listSitemaps();
-    const wrapped = withMeta(results, "list_sitemaps", {});
+    const results = await listProperties();
+    const wrapped = withMeta(
+      results,
+      "list_properties",
+      {},
+      "Google Search Console API (sites.list, live data)",
+      "This is the definitive list of properties the authenticated credential can access. Use these exact siteUrl strings as the site_url parameter on other tools; do not guess or reformat them. A property with canAnalyse false cannot return Search Analytics data."
+    );
     return {
       content: [{ type: "text", text: JSON.stringify(wrapped, null, 2) }],
     };
@@ -585,13 +656,13 @@ async function main() {
     process.exit(code);
   }
   if (cmd === "--version" || cmd === "-v") {
-    console.log("2.5.1");
+    console.log("3.0.0");
     process.exit(0);
   }
 
   const transport = new StdioServerTransport();
   await server.connect(transport);
-  console.error("GSC MCP server v2.5.1 running on stdio");
+  console.error("GSC MCP server v3.0.0 (multi-property) running on stdio");
 }
 
 main().catch((error) => {

@@ -13,14 +13,55 @@ export function getAuthMode(): AuthMode {
   return "service_account";
 }
 
+/**
+ * Properties named by GSC_SITE_URLS, in declaration order. Empty when the var
+ * is unset. GSC_SITE_URL, when set, is always the first entry.
+ */
+export function configuredSiteUrls(): string[] {
+  const single = process.env.GSC_SITE_URL?.trim();
+  const list = process.env.GSC_SITE_URLS
+    ? process.env.GSC_SITE_URLS.split(",").map((s) => s.trim()).filter(Boolean)
+    : [];
+  const ordered = single ? [single, ...list.filter((s) => s !== single)] : list;
+  return ordered;
+}
+
+/**
+ * The property a tool falls back to when the caller names none.
+ * Undefined when nothing is configured, which is legitimate: every tool now
+ * accepts an explicit site_url, so a server with no default is still usable.
+ */
+export function defaultSiteUrl(): string | undefined {
+  return configuredSiteUrls()[0];
+}
+
+/**
+ * Single decision point for "which property does this call run against".
+ *
+ * An explicit per-call site_url always wins; otherwise the configured default
+ * is used. Resolution deliberately does NOT consult auth config, so a caller
+ * that always passes site_url needs no GSC_SITE_URL at all — which is what
+ * lets one server process serve a whole account (and, later, many users).
+ */
+export function resolveSiteUrl(requested?: string): string {
+  const explicit = requested?.trim();
+  if (explicit) return explicit;
+
+  const fallback = defaultSiteUrl();
+  if (!fallback) {
+    throw new Error(
+      "No Search Console property specified. Pass site_url on the tool call, " +
+      "or set GSC_SITE_URL (or GSC_SITE_URLS) to provide a default. " +
+      "Call list_properties to see every property this account can access."
+    );
+  }
+  return fallback;
+}
+
 export function getConfig() {
   const mode = getAuthMode();
   const siteUrl = process.env.GSC_SITE_URL;
-  const siteUrls = process.env.GSC_SITE_URLS
-    ? process.env.GSC_SITE_URLS.split(",").map((s) => s.trim()).filter(Boolean)
-    : siteUrl
-      ? [siteUrl]
-      : [];
+  const siteUrls = configuredSiteUrls();
 
   if (mode === "service_account") {
     const keyFile = process.env.GSC_KEY_FILE;

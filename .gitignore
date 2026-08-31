@@ -1,5 +1,10 @@
 node_modules/
 .env
+
+# Build output. Upstream commits dist/ so its .mcpb desktop bundle can be
+# packed without a compile step; this fork builds from source instead, which
+# keeps diffs readable. Run `npm run build` before packing a bundle.
+dist/
 *.json
 !package.json
 !package-lock.json

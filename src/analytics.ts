@@ -1,4 +1,4 @@
-import { getSearchConsoleClient, getConfig } from "./auth.js";
+import { getSearchConsoleClient, resolveSiteUrl } from "./auth.js";
 
 export interface SearchAnalyticsRow {
   keys: string[];
@@ -63,7 +63,7 @@ export function getPriorDateRange(days: number): { startDate: string; endDate: s
  */
 export async function fetchAllRows(params: QueryParams, siteUrlOverride?: string): Promise<SearchAnalyticsRow[]> {
   const client = await getSearchConsoleClient();
-  const siteUrl = siteUrlOverride || getConfig().siteUrl;
+  const siteUrl = resolveSiteUrl(siteUrlOverride);
   const allRows: SearchAnalyticsRow[] = [];
   const pageSize = params.rowLimit || 25000;
   let startRow = 0;

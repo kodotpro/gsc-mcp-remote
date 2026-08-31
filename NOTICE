@@ -1,5 +1,23 @@
-Suganthan's GSC MCP Server
-Copyright 2025 Suganthan Mohanadasan
+gsc-mcp-remote
+Copyright 2026 Oleksii Khoroshun
 
-This product was created by Suganthan Mohanadasan (https://suganthan.com).
-Original source: https://github.com/Suganthan-Mohanadasan/Suganthans-GSC-MCP
+This product is a modified fork of:
+
+  Suganthan's GSC MCP Server
+  Copyright 2025 Suganthan Mohanadasan
+  Created by Suganthan Mohanadasan (https://suganthan.com).
+  Original source: https://github.com/Suganthan-Mohanadasan/Suganthans-GSC-MCP
+
+Licensed under the Apache License, Version 2.0.
+
+Modifications in this fork (see README for detail):
+  - Every property-scoped tool accepts an optional site_url, so one server
+    process can cover an entire Search Console account rather than the single
+    property named by GSC_SITE_URL. (Addresses upstream issue #9.)
+  - New list_properties tool exposing sites.list at runtime.
+  - The resolved property is reported in each tool's response metadata.
+  - A configured default property is no longer required when callers pass
+    site_url explicitly.
+  - Renamed from suganthan-gsc-mcp to gsc-mcp-remote.
+
+This fork is not affiliated with or endorsed by the original author.

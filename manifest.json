@@ -1,25 +1,21 @@
 {
   "manifest_version": "0.2",
-  "name": "suganthan-gsc-mcp",
-  "display_name": "Suganthan's GSC MCP",
-  "version": "2.5.1",
-  "description": "Ask Claude real questions about your Google Search Console data. 28 SEO analysis tools, local and private.",
-  "long_description": "A Google Search Console MCP server that answers questions, not API rows: quick win keywords, traffic drops, content decay, cannibalisation, CTR benchmarks, multi site dashboards, and a full image search suite with an on-page image audit. Free and open source. Runs entirely on your machine: your data goes straight from this computer to Google and nothing passes through anyone else's servers.",
+  "name": "gsc-mcp-remote",
+  "display_name": "GSC MCP (multi-property)",
+  "version": "3.0.0",
+  "description": "Ask Claude real questions about your Google Search Console data, across every property in your account. 30 SEO analysis tools.",
+  "long_description": "A Google Search Console MCP server that answers questions, not API rows: quick win keywords, traffic drops, content decay, cannibalisation, CTR benchmarks, multi site dashboards, and a full image search suite with an on-page image audit. Every property-scoped tool takes an optional site_url, and list_properties shows what your account can access, so one install covers all your properties instead of just one. Free and open source. A modified fork of Suganthan Mohanadasan's GSC MCP; runs entirely on your machine.",
   "author": {
-    "name": "Suganthan Mohanadasan",
-    "email": "sugan@suganthan.com",
-    "url": "https://suganthan.com"
+    "name": "Oleksii Khoroshun"
   },
-  "homepage": "https://suganthan.com/blog/google-search-console-mcp-server/",
-  "documentation": "https://github.com/Suganthan-Mohanadasan/Suganthans-GSC-MCP#readme",
-  "support": "https://github.com/Suganthan-Mohanadasan/Suganthans-GSC-MCP/issues",
   "license": "Apache-2.0",
   "keywords": [
     "seo",
     "google-search-console",
     "gsc",
     "search-analytics",
-    "image-seo"
+    "image-seo",
+    "multi-property"
   ],
   "server": {
     "type": "node",
@@ -40,9 +36,9 @@
   "user_config": {
     "site_url": {
       "type": "string",
-      "title": "Default Search Console property",
-      "description": "For example sc-domain:yoursite.com or https://www.yoursite.com/",
-      "required": true
+      "title": "Default Search Console property (optional)",
+      "description": "Used when a tool is called without site_url, e.g. sc-domain:yoursite.com or https://www.yoursite.com/. Leave blank to work across all your properties and name one per request; ask Claude to list your properties to see them.",
+      "required": false
     },
     "access_level": {
       "type": "string",
