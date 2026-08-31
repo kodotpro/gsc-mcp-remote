@@ -357,6 +357,20 @@ The server logs session open/close events and refresh activity, never tokens or 
 
 Memory is capped at 512 MB with Node's heap at 384 MB, deliberately: Search Analytics results are accumulated in memory and a large property over a long window can be tens of megabytes, so the cap keeps this service from starving anything else on the box.
 
+### Self-checks
+
+Two smoke tests run without any Google credentials, so they are safe to run anywhere — they are what CI runs:
+
+```bash
+node scripts/check-tools.mjs
+```
+
+```bash
+node scripts/check-http.mjs
+```
+
+The first asserts every tool registers over stdio and that the right ones expose `site_url` — it fails if a tool silently loses the parameter. The second boots HTTP mode with a throwaway token and checks the health endpoint, that the bearer token is enforced, that a session lists all 30 tools, and that teardown leaves none behind.
+
 ### What remote mode changes
 
 Two tools behave differently when the server is not on your own machine:

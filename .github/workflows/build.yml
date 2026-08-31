@@ -31,5 +31,8 @@ jobs:
       # No Google credentials in CI, so this exercises what can be checked
       # without them: the server boots, completes an MCP handshake, and
       # registers every tool with the expected schema.
-      - name: MCP handshake and tool-schema check
+      - name: MCP handshake and tool-schema check (stdio)
         run: node scripts/check-tools.mjs
+
+      - name: Health, auth and session checks (remote HTTP)
+        run: node scripts/check-http.mjs
