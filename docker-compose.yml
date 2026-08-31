@@ -1,0 +1,50 @@
+# Remote deployment for a single shared credential (Phase 2).
+#
+# The container listens only on loopback: CloudPanel's nginx is the only thing
+# that reaches it, and it terminates TLS for gsc.k-o.pro. Nothing here opens a
+# port to the internet directly.
+services:
+  gsc-mcp:
+    build: .
+    image: gsc-mcp-remote:local
+    container_name: gsc-mcp
+    restart: unless-stopped
+
+    # 127.0.0.1 on the left is load-bearing. Binding 0.0.0.0 would expose the
+    # server on the host's public interface, bypassing nginx and TLS.
+    ports:
+      - "127.0.0.1:${GSC_HTTP_PORT:-8787}:8787"
+
+    # GSC_HTTP_TOKEN and GSC_OAUTH_SECRETS_FILE come from .env — see .env.example.
+    env_file: .env
+
+    environment:
+      GSC_HTTP_HOST: "0.0.0.0"        # inside the container only
+      GSC_HTTP_PORT: "8787"
+      # The public hostname must be allow-listed or proxied requests get 403,
+      # because binding 0.0.0.0 disables the SDK's localhost-only host check.
+      GSC_HTTP_ALLOWED_HOSTS: "${GSC_HTTP_ALLOWED_HOSTS:-gsc.k-o.pro}"
+      # Cap V8's heap below the container limit so a huge Search Analytics
+      # result fails as a JS error instead of getting the container OOM-killed.
+      NODE_OPTIONS: "--max-old-space-size=384"
+
+    volumes:
+      # Writable: holds .gsc-mcp/oauth-token.json, refreshed in place.
+      - ./data:/data
+      # Read-only: the Google OAuth client secrets JSON.
+      - ./secrets:/secrets:ro
+
+    # This box also runs CloudPanel and n8n on 4 GB, with swap already in use.
+    # A runaway query here must not be able to starve them.
+    mem_limit: 512m
+    memswap_limit: 512m
+    pids_limit: 256
+
+    security_opt:
+      - no-new-privileges:true
+
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"

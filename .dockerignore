@@ -1,0 +1,12 @@
+node_modules
+dist
+.git
+.github
+data
+secrets
+.env
+*.mcpb
+screenshots
+docs
+article.md
+gsc-mcp-build-spec.md

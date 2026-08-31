@@ -19,5 +19,12 @@ Modifications in this fork (see README for detail):
   - A configured default property is no longer required when callers pass
     site_url explicitly.
   - Renamed from suganthan-gsc-mcp to gsc-mcp-remote.
+  - Added a remote HTTP transport (Streamable HTTP) alongside stdio, with
+    per-session server instances, shared-bearer-token auth, a health endpoint,
+    and container/compose deployment files.
+  - generate_report returns markdown inline in remote mode instead of writing
+    to the server's filesystem.
+  - image_page_audit refuses private/loopback/link-local targets in remote
+    mode, re-validating each redirect hop.
 
 This fork is not affiliated with or endorsed by the original author.

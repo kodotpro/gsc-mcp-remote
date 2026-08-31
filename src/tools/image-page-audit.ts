@@ -1,6 +1,8 @@
 import { parse, type HTMLElement } from "node-html-parser";
 import { imageSize } from "image-size";
 import exifr from "exifr";
+import { isRemoteMode } from "../runtime.js";
+import { assertPublicUrl, BlockedUrlError } from "../net-guard.js";
 
 /**
  * Fetches pages from the user's own site and audits every image on them
@@ -161,18 +163,47 @@ function walkForImageObjects(node: unknown, hits: Record<string, unknown>[]): vo
   }
 }
 
+const MAX_REDIRECTS = 4;
+
 async function fetchWithTimeout(
   url: string,
   timeoutMs: number
 ): Promise<Response> {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
+
   try {
-    return await fetch(url, {
-      headers: { "User-Agent": USER_AGENT, Accept: "*/*" },
-      redirect: "follow",
-      signal: controller.signal,
-    });
+    // Locally this fetches from the user's own machine, where reaching
+    // localhost is legitimate (auditing a dev server). Hosted, the same call
+    // originates inside the server's network, so each hop is checked and
+    // redirects are followed by hand rather than trusted to land somewhere
+    // public.
+    if (!isRemoteMode()) {
+      return await fetch(url, {
+        headers: { "User-Agent": USER_AGENT, Accept: "*/*" },
+        redirect: "follow",
+        signal: controller.signal,
+      });
+    }
+
+    let target = url;
+    for (let hop = 0; hop <= MAX_REDIRECTS; hop++) {
+      await assertPublicUrl(target);
+
+      const response = await fetch(target, {
+        headers: { "User-Agent": USER_AGENT, Accept: "*/*" },
+        redirect: "manual",
+        signal: controller.signal,
+      });
+
+      const isRedirect = response.status >= 300 && response.status < 400;
+      const location = response.headers.get("location");
+      if (!isRedirect || !location) return response;
+
+      target = new URL(location, target).toString();
+    }
+
+    throw new BlockedUrlError(`Too many redirects starting from ${url}`);
   } finally {
     clearTimeout(timer);
   }

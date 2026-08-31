@@ -5,6 +5,11 @@ node_modules/
 # packed without a compile step; this fork builds from source instead, which
 # keeps diffs readable. Run `npm run build` before packing a bundle.
 dist/
+
+# Deployment secrets and state. Never commit these: data/ holds the live
+# Google OAuth token, secrets/ the client secrets (.env is covered above).
+data/
+secrets/
 *.json
 !package.json
 !package-lock.json
