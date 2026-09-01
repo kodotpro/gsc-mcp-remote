@@ -2,12 +2,12 @@
 
 A Google Search Console MCP server that answers questions instead of returning API rows — and does it across **every property in your account**, from a **local process or a remote server**.
 
-30 tools. OAuth or service account. Apache-2.0.
+31 tools. OAuth or service account. Apache-2.0.
 
 Two things make it different from other GSC MCP servers:
 
 - **Multi-property.** Every property-scoped tool takes a `site_url`, and `list_properties` discovers what your credential can see. One install covers a whole account; you never edit config to look at another site.
-- **Remote-capable.** Runs locally over stdio, or as a hosted HTTP service so Claude does not have to be on the same machine as the server.
+- **Remote-capable.** Runs locally over stdio, or as a hosted HTTP service — including a full per-user mode where anyone adds the server by URL in Claude and signs in with their own Google account, and Google's own property permissions decide what each person sees.
 
 ---
 
@@ -17,7 +17,7 @@ Two things make it different from other GSC MCP servers:
 - [Quick start (local)](#quick-start-local)
 - [Multi-property](#multi-property)
 - [Remote mode](#remote-mode)
-- [All 30 tools](#all-30-tools)
+- [All 31 tools](#all-31-tools)
 - [Environment variables](#environment-variables)
 - [Credits](#credits)
 - [Changelog](#changelog)
@@ -120,21 +120,34 @@ Every response reports the property it used in `_meta.parameters.site_url`.
 
 ## Remote mode
 
-The server can run as a hosted HTTP service, so Claude does not have to be on the same machine. Same 30 tools, same behaviour — a different transport.
+The server can run as a hosted HTTP service, so Claude does not have to be on the same machine. Same 31 tools, same behaviour — a different transport.
 
-### Which Claude clients can connect
+### Two ways to run it
 
-Remote mode authenticates with a **single shared bearer token**. That determines where it works:
+| | `GSC_HTTP_AUTH=oauth` — per-user sign-in | `GSC_HTTP_AUTH=bearer` — shared secret (default) |
+|---|---|---|
+| Who connects | Anyone you allow: they add the URL and sign in with **their own Google account** | Whoever holds the one token |
+| What they see | **Their** properties — Google's own permissions apply per person | Everything the server's single Google credential sees |
+| claude.ai / Desktop connector UI | **Yes** — add by URL, OAuth is discovered automatically | No (no header field in those UIs) |
+| Claude Code | Yes — `claude mcp add --transport http <url>` and it walks the OAuth flow | Yes — with `--header "Authorization: Bearer ..."` |
+| Google credentials on the server | Each user's refresh token, **encrypted at rest** in a local vault | One credential you copied up |
+| Runtime | Node 24+ (the Docker image is) | Node 18+ |
 
-| Client | Works today | Why |
-|--------|-------------|-----|
-| **Claude Code** (CLI) | **Yes** | `claude mcp add --transport http` accepts an `Authorization` header |
-| claude.ai custom connector | Not yet | The connector UI has no arbitrary-header field; it expects OAuth |
-| Claude Desktop connector | Not yet | Same reason |
+Bearer stays the default so an existing deployment keeps working over a plain `git pull && docker compose up -d --build`; OAuth mode is switched on explicitly in `.env`. In OAuth mode the server requests **only the read-only Google scope** and the write tools stay disabled.
 
-To try a remote deployment today, use **Claude Code** — from any machine and any Claude account, as long as it has the URL and the token. Support for the claude.ai and Desktop connector UIs needs per-user OAuth, which is the next milestone.
+### Per-user sign-in: how it works
 
-> **Who can see what.** In this phase the server holds **one** Google credential and every request is served with it. Anyone holding the bearer token can read every property that credential can see. Only share it with people allowed to see all of them. Per-user Google sign-in, where Google's own property permissions apply per person, is next.
+The server implements the MCP authorization spec — discovery metadata, dynamic client registration, PKCE — so Claude clients onboard by URL alone. Inside the connect flow the person is sent to Google's consent screen ("the sandwich"): the server issues **its own** tokens to Claude and holds the user's Google refresh token server-side, encrypted with a key that never leaves the box. Claude never sees Google credentials; Google never sees MCP tokens. Presenting a stolen rotated refresh token burns every session it belonged to, and a Google-side revocation (myaccount.google.com, password change) cascades: the user's MCP tokens die with it and the next request simply re-runs sign-in.
+
+**Google Cloud setup (one-time, ~10 minutes).** In [console.cloud.google.com](https://console.cloud.google.com), with the Search Console API enabled:
+
+1. **OAuth consent screen:** External. While it is in **Testing** status, only Google accounts you list as **test users** can sign in — that is your beta gate (up to 100 people, refresh tokens expire weekly until the app is verified for production).
+2. **Credentials → Create credentials → OAuth client ID → Web application**, with exactly this authorised redirect URI: `https://YOUR_DOMAIN/oauth/google/callback`
+3. Put the client id + secret in `.env` (`GSC_GOOGLE_CLIENT_ID` / `GSC_GOOGLE_CLIENT_SECRET`), set `GSC_HTTP_AUTH=oauth` and `GSC_PUBLIC_URL=https://YOUR_DOMAIN`, restart.
+
+**Connecting (what your users do):** in claude.ai → Settings → Connectors → Add custom connector → paste `https://YOUR_DOMAIN/mcp` → sign in with Google when the browser opens. In Claude Code: `claude mcp add --transport http gsc https://YOUR_DOMAIN/mcp` (no header needed — it discovers OAuth and opens the browser). Then: *"list my Search Console properties"*.
+
+Optional gates on top of Google's test-user list: `GSC_ALLOWED_EMAILS` / `GSC_ALLOWED_EMAIL_DOMAINS`. Each user can save a personal default with the `set_default_property` tool. Disconnecting from the client (or revoking at myaccount.google.com/permissions) is honoured server-side.
 
 ### Try it locally first
 
@@ -266,7 +279,7 @@ docker compose logs -f --tail 50
 docker compose up -d --build   # after a git pull
 ```
 
-The server logs session open/close events and token refreshes, never tokens or query data. `/healthz` reports active session count. Sessions idle for 30 minutes are closed automatically (`GSC_HTTP_IDLE_TIMEOUT_MS`).
+The server logs session open/close events and token refreshes, never tokens or query data. In OAuth mode, state lives in two files on the data volume: the SQLite database (users, registrations, token hashes, encrypted Google refresh tokens) and the vault key. Losing the vault key is survivable by design — every user just reconnects. `/healthz` reports active session count. Sessions idle for 30 minutes are closed automatically (`GSC_HTTP_IDLE_TIMEOUT_MS`).
 
 Memory is capped at 512 MB with Node's heap at 384 MB, deliberately: Search Analytics results are accumulated in memory and a large property over a long window can be tens of megabytes, so the cap keeps this service from starving anything else on the box.
 
@@ -282,7 +295,11 @@ node scripts/check-tools.mjs
 node scripts/check-http.mjs
 ```
 
-The first asserts every tool registers over stdio and that the right ones expose `site_url` — it fails if a tool silently loses the parameter. The second boots HTTP mode with a throwaway token and checks the health endpoint, that the bearer token is enforced, that a session lists all 30 tools, and that teardown leaves none behind.
+The first asserts every tool registers over stdio and that the right ones expose `site_url` — it fails if a tool silently loses the parameter. The second boots bearer-mode HTTP with a throwaway token and checks the health endpoint, token enforcement, that a session lists all 31 tools, and that teardown leaves none behind. The third covers OAuth mode end to end without Google: the sandwich, PKCE, single-use codes, refresh rotation and reuse-burning, audience binding, the revocation cascade, discovery metadata, DCR, and that one user's session rejects another user's valid token:
+
+```bash
+node scripts/check-oauth.mjs
+```
 
 ### What remote mode changes
 
@@ -293,7 +310,7 @@ Two tools behave differently when the server is not on your own machine:
 
 ---
 
-## All 30 tools
+## All 31 tools
 
 Every tool marked **P** takes an optional `site_url` to target any property your credential can see.
 
@@ -302,6 +319,7 @@ Every tool marked **P** takes an optional `site_url` to target any property your
 | Tool | What it answers | P |
 |------|-----------------|---|
 | `list_properties` | Which properties can this account access, and which is the default | |
+| `set_default_property` | Save the signed-in user's own default property (hosted per-user mode) | |
 | `multi_site_dashboard` | Health check across many properties at once (takes `site_urls`) | |
 
 ### Analysis
@@ -382,6 +400,17 @@ Tool descriptions carry explicit instructions to base analysis only on returned 
 | `GSC_HTTP_HOST` | No | Bind address (default `127.0.0.1`; the container sets `0.0.0.0`) |
 | `GSC_HTTP_IDLE_TIMEOUT_MS` | No | Close sessions idle longer than this (default 1800000, i.e. 30 minutes) |
 
+### OAuth (per-user) mode only
+
+| Variable | Required | Description |
+|----------|----------|-------------|
+| `GSC_HTTP_AUTH` | To enable | `oauth` (default is `bearer`) |
+| `GSC_PUBLIC_URL` | Yes | Public base URL, e.g. `https://gsc.example.com` — the OAuth issuer, token audience, and Google-callback base |
+| `GSC_GOOGLE_CLIENT_ID` / `GSC_GOOGLE_CLIENT_SECRET` | Yes* | Google **Web application** client with `<GSC_PUBLIC_URL>/oauth/google/callback` registered (*or reuse `GSC_OAUTH_SECRETS_FILE`) |
+| `GSC_ALLOWED_EMAILS` / `GSC_ALLOWED_EMAIL_DOMAINS` | No | Extra sign-in allowlist on top of Google's Testing-status test users |
+| `GSC_OAUTH_DB_FILE` | No | SQLite path (default `~/.gsc-mcp/oauth-server.db`) |
+| `GSC_VAULT_KEY_FILE` | No | Vault key path (default `~/.gsc-mcp/vault.key`, auto-created 0600) |
+
 ---
 
 ## Credits
@@ -395,6 +424,8 @@ The anti-hallucination guardrail approach came from feedback by [Krinal Mehta](h
 ---
 
 ## Changelog
+
+**v3.2.0** — Per-user Google sign-in. `GSC_HTTP_AUTH=oauth` turns the remote server into a full MCP OAuth authorization + resource server (discovery metadata, dynamic client registration, PKCE via the official SDK's auth router), so anyone can add it by URL in claude.ai, Claude Desktop, or Claude Code and sign in with their own Google account — Google's own property permissions then decide what each person sees. Architecture: the server mints its own opaque, hashed, rotating tokens for Claude; the user's Google refresh token is held server-side, AES-256-GCM-encrypted under a key file beside the SQLite database (`node:sqlite`, no native deps). Refresh-token reuse burns the client's sessions; a Google-side revocation cascades so the next request re-runs sign-in. Per-request user context flows through AsyncLocalStorage into the same two functions every tool already used, so all 31 tools became per-user without changing — plus the new `set_default_property` for a personal default. Sessions are owner-bound: a valid token belonging to another user is rejected with 403. Bearer mode remains the default and unchanged; OAuth mode forces the read-only scope. Runtime for OAuth mode: Node 24+ (Docker image bumped). 47-check credential-free test suite in `scripts/check-oauth.mjs`.
 
 **v3.1.0** — Remote mode. Runs as a hosted HTTP service over Streamable HTTP (`node dist/index.js http`), serving the same 30 tools to Claude clients on other machines. Tool registration moved into a `createServer()` factory, because `server.connect()` binds one `McpServer` to one transport and HTTP mode needs a fresh instance per session. Sessions support client teardown via `DELETE /mcp` plus an idle sweeper; `/healthz` reports liveness and active session count without auth. Auth is a shared bearer token (`GSC_HTTP_TOKEN`, constant-time compared, minimum 24 characters, server refuses to start without it) — enough for Claude Code, while the claude.ai and Desktop connector UIs await per-user OAuth. `generate_report` returns markdown inline rather than writing to the server's disk, and `image_page_audit` refuses private, loopback and link-local targets, re-validating every redirect hop. Ships a Dockerfile and compose file publishing to loopback only, running as uid 1000, with memory capped so a large Search Analytics result cannot starve neighbouring services.
 

@@ -14,6 +14,7 @@ import { createInterface } from "node:readline";
 
 // Must accept a site_url. Anything property-scoped belongs here.
 const NEEDS_SITE_URL = [
+  "set_default_property", // site_url here is the subject being saved, and required
   "quick_wins",
   "ctr_opportunities",
   "traffic_drops",

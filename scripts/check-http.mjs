@@ -111,7 +111,7 @@ try {
     const listRes = await post({ jsonrpc: "2.0", id: 2, method: "tools/list" }, sessionHeaders);
     const listed = await listRes.json();
     const count = listed?.result?.tools?.length ?? 0;
-    check("tools/list over HTTP returns the full tool set", count === 30, `got ${count}`);
+    check("tools/list over HTTP returns the full tool set", count === 31, `got ${count}`);
 
     const afterOpen = await (await fetch(`${BASE}/healthz`)).json();
     check("the open session is counted", afterOpen.activeSessions === 1, `got ${afterOpen.activeSessions}`);

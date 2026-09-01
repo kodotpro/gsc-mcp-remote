@@ -26,5 +26,8 @@ Modifications in this fork (see README for detail):
     to the server's filesystem.
   - image_page_audit refuses private/loopback/link-local targets in remote
     mode, re-validating each redirect hop.
+  - Added per-user Google sign-in (MCP OAuth authorization server with DCR and
+    PKCE, per-user encrypted token vault, per-request user context), so a
+    hosted instance serves many users, each seeing only their own properties.
 
 This fork is not affiliated with or endorsed by the original author.

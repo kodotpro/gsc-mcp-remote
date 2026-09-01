@@ -48,6 +48,7 @@ import { imagePageAudit } from "./tools/image-page-audit.js";
 // every tool reports which property it actually used.
 import { listProperties } from "./tools/list-properties.js";
 import { resolveSiteUrl } from "./auth.js";
+import { getUserContext } from "./request-context.js";
 
 const SITE_URL_PARAM = z
   .string()
@@ -57,7 +58,7 @@ const SITE_URL_PARAM = z
     "Defaults to the configured property. Call list_properties to see what this account can access."
   );
 
-export const SERVER_VERSION = "3.1.0";
+export const SERVER_VERSION = "3.2.0";
 
 export function createServer(): McpServer {
   const server = new McpServer({
@@ -461,6 +462,36 @@ function registerTools(server: McpServer): void {
       );
       return {
         content: [{ type: "text", text: JSON.stringify(wrapped, null, 2) }],
+      };
+    }
+  );
+
+  // 31. Set Default Property (hosted multi-user mode)
+  server.tool(
+    "set_default_property",
+    "Save a default Search Console property for the signed-in user, so later tool calls can omit site_url. Only meaningful on the hosted (per-user sign-in) deployment, where each user keeps their own default; a locally-run server takes its default from GSC_SITE_URL instead." + GUARDRAIL_SUFFIX,
+    {
+      site_url: z
+        .string()
+        .describe("The property to make this user's default, exactly as list_properties reports it (e.g. sc-domain:example.com or https://www.example.com/)"),
+    },
+    async ({ site_url }) => {
+      const ctx = getUserContext();
+      if (!ctx) {
+        return {
+          content: [{
+            type: "text",
+            text: "This server runs in single-user mode, where the default property comes from the GSC_SITE_URL environment variable. Per-user defaults exist only on the hosted deployment with Google sign-in.",
+          }],
+        };
+      }
+      const property = site_url.trim();
+      ctx.settings.setDefaultProperty(property);
+      return {
+        content: [{
+          type: "text",
+          text: `Default property saved: ${property}. Tool calls without site_url now use it. It stays saved across sessions until changed.`,
+        }],
       };
     }
   );

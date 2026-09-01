@@ -2,6 +2,7 @@ import { google } from "googleapis";
 import { searchconsole_v1 } from "googleapis";
 import * as fs from "fs";
 import { authenticateWithOAuth, getScopeTier, scopesForTier } from "./oauth.js";
+import { getUserContext } from "./request-context.js";
 
 let cachedClient: searchconsole_v1.Searchconsole | null = null;
 
@@ -32,6 +33,11 @@ export function configuredSiteUrls(): string[] {
  * accepts an explicit site_url, so a server with no default is still usable.
  */
 export function defaultSiteUrl(): string | undefined {
+  // A signed-in user's own saved default (set via set_default_property on the
+  // hosted deployment) takes precedence over the process-wide env default.
+  const ctx = getUserContext();
+  const userDefault = ctx?.settings.getDefaultProperty();
+  if (userDefault) return userDefault;
   return configuredSiteUrls()[0];
 }
 
@@ -49,9 +55,12 @@ export function resolveSiteUrl(requested?: string): string {
 
   const fallback = defaultSiteUrl();
   if (!fallback) {
+    const remote = Boolean(getUserContext());
     throw new Error(
-      "No Search Console property specified. Pass site_url on the tool call, " +
-      "or set GSC_SITE_URL (or GSC_SITE_URLS) to provide a default. " +
+      "No Search Console property specified. Pass site_url on the tool call" +
+      (remote
+        ? ", or save one with set_default_property. "
+        : ", or set GSC_SITE_URL (or GSC_SITE_URLS) to provide a default. ") +
       "Call list_properties to see every property this account can access."
     );
   }
@@ -115,6 +124,11 @@ async function getOAuthClient(): Promise<searchconsole_v1.Searchconsole> {
 }
 
 export async function getSearchConsoleClient(): Promise<searchconsole_v1.Searchconsole> {
+  // Multi-user (OAuth HTTP) mode: every request carries its user's own client,
+  // so all 30 tools run as the person asking without any of them changing.
+  const ctx = getUserContext();
+  if (ctx) return ctx.getSearchConsole();
+
   if (cachedClient) return cachedClient;
 
   const mode = getAuthMode();
