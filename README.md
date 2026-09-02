@@ -2,7 +2,7 @@
 
 A Google Search Console MCP server that answers questions instead of returning API rows — and does it across **every property in your account**, from a **local process or a remote server**.
 
-31 tools. OAuth or service account. Apache-2.0.
+33 tools. OAuth or service account. Apache-2.0.
 
 Two things make it different from other GSC MCP servers:
 
@@ -17,7 +17,7 @@ Two things make it different from other GSC MCP servers:
 - [Quick start (local)](#quick-start-local)
 - [Multi-property](#multi-property)
 - [Remote mode](#remote-mode)
-- [All 31 tools](#all-31-tools)
+- [All 33 tools](#all-33-tools)
 - [Environment variables](#environment-variables)
 - [Credits](#credits)
 - [Changelog](#changelog)
@@ -120,7 +120,7 @@ Every response reports the property it used in `_meta.parameters.site_url`.
 
 ## Remote mode
 
-The server can run as a hosted HTTP service, so Claude does not have to be on the same machine. Same 31 tools, same behaviour — a different transport.
+The server can run as a hosted HTTP service, so Claude does not have to be on the same machine. Same 33 tools, same behaviour — a different transport.
 
 ### Two ways to run it
 
@@ -137,7 +137,7 @@ Bearer stays the default so an existing deployment keeps working over a plain `g
 
 ### Per-user sign-in: how it works
 
-The server implements the MCP authorization spec — discovery metadata, dynamic client registration, PKCE — so Claude clients onboard by URL alone. Inside the connect flow the person is sent to Google's consent screen ("the sandwich"): the server issues **its own** tokens to Claude and holds the user's Google refresh token server-side, encrypted with a key that never leaves the box. Claude never sees Google credentials; Google never sees MCP tokens. Presenting a stolen rotated refresh token burns every session it belonged to, and a Google-side revocation (myaccount.google.com, password change) cascades: the user's MCP tokens die with it and the next request simply re-runs sign-in.
+The server implements the MCP authorization spec — discovery metadata, dynamic client registration, PKCE — so Claude clients onboard by URL alone. Because registration is open to any caller, every authorization stops first at a consent page on this server that names the requesting application and the exact host the result would be sent to, and warns when that host is not a Claude address; nothing proceeds without an explicit click. Only then is the person sent to Google's consent screen ("the sandwich"): the server issues **its own** tokens to Claude and holds the user's Google refresh token server-side, encrypted with a key that never leaves the box. Claude never sees Google credentials; Google never sees MCP tokens. Presenting a stolen rotated refresh token burns every session it belonged to, and a Google-side revocation (myaccount.google.com, password change) cascades: the user's MCP tokens die with it and the next request simply re-runs sign-in.
 
 **Google Cloud setup (one-time, ~10 minutes).** In [console.cloud.google.com](https://console.cloud.google.com), with the Search Console API enabled:
 
@@ -147,7 +147,7 @@ The server implements the MCP authorization spec — discovery metadata, dynamic
 
 **Connecting (what your users do):** in claude.ai → Settings → Connectors → Add custom connector → paste `https://YOUR_DOMAIN/mcp` → sign in with Google when the browser opens. In Claude Code: `claude mcp add --transport http gsc https://YOUR_DOMAIN/mcp` (no header needed — it discovers OAuth and opens the browser). Then: *"list my Search Console properties"*.
 
-Optional gates on top of Google's test-user list: `GSC_ALLOWED_EMAILS` / `GSC_ALLOWED_EMAIL_DOMAINS`. Each user can save a personal default with the `set_default_property` tool. Disconnecting from the client (or revoking at myaccount.google.com/permissions) is honoured server-side.
+Optional gates on top of Google's test-user list: `GSC_ALLOWED_EMAILS` / `GSC_ALLOWED_EMAIL_DOMAINS`. Each user can save a personal default with `set_default_property`, see everything stored about them with `export_my_data`, and erase it with `disconnect_account` — which deletes the stored Google connection, every token, and their settings, and ends their sessions immediately. Revoking at myaccount.google.com/permissions is honoured too: the next request fails, the stored credential is erased, and the client re-runs sign-in.
 
 ### Try it locally first
 
@@ -283,9 +283,20 @@ The server logs session open/close events and token refreshes, never tokens or q
 
 Memory is capped at 512 MB with Node's heap at 384 MB, deliberately: Search Analytics results are accumulated in memory and a large property over a long window can be tens of megabytes, so the cap keeps this service from starving anything else on the box.
 
+Three limits stop one caller from taking the process down, since each session holds its own tool registry (~440 KB, so roughly 900 sessions would exhaust the heap):
+
+| Limit | Default | Variable |
+|---|---|---|
+| Concurrent sessions, server-wide | 120 | `GSC_MAX_SESSIONS` |
+| Concurrent sessions per user | 8 | `GSC_MAX_SESSIONS_PER_USER` |
+| Requests per user per minute | 60 | `GSC_RATE_LIMIT_PER_MIN` |
+| Rows accumulated per query | 100,000 | `GSC_MAX_TOTAL_ROWS` |
+
+Exceeding them returns `429` (or `503` at the server-wide session ceiling) with `Retry-After`, rather than an OOM. A query that hits the row ceiling says so in its response instead of silently reporting partial data.
+
 ### Self-checks
 
-Two smoke tests run without any Google credentials, so they are safe to run anywhere — they are what CI runs:
+Four test suites run without any Google credentials, so they are safe to run anywhere — they are what CI runs:
 
 ```bash
 node scripts/check-tools.mjs
@@ -295,10 +306,14 @@ node scripts/check-tools.mjs
 node scripts/check-http.mjs
 ```
 
-The first asserts every tool registers over stdio and that the right ones expose `site_url` — it fails if a tool silently loses the parameter. The second boots bearer-mode HTTP with a throwaway token and checks the health endpoint, token enforcement, that a session lists all 31 tools, and that teardown leaves none behind. The third covers OAuth mode end to end without Google: the sandwich, PKCE, single-use codes, refresh rotation and reuse-burning, audience binding, the revocation cascade, discovery metadata, DCR, and that one user's session rejects another user's valid token:
+The first asserts every tool registers over stdio and that the right ones expose `site_url` — it fails if a tool silently loses the parameter. The second boots bearer-mode HTTP with a throwaway token and checks the health endpoint, token enforcement, that a session lists all 33 tools, and that teardown leaves none behind. The fourth is a regression suite for the hardening fixes: SSRF address classification across 34 address forms, fetch deadlines and byte caps against a deliberately hostile server, redirect re-validation, and report-path confinement. The third covers OAuth mode end to end without Google: the sandwich, PKCE, single-use codes, refresh rotation and reuse-burning, audience binding, the revocation cascade, discovery metadata, DCR, and that one user's session rejects another user's valid token:
 
 ```bash
 node scripts/check-oauth.mjs
+```
+
+```bash
+node scripts/check-hardening.mjs
 ```
 
 ### What remote mode changes
@@ -306,11 +321,11 @@ node scripts/check-oauth.mjs
 Two tools behave differently when the server is not on your own machine:
 
 - **`generate_report`** returns the markdown inline instead of writing a file, because a file would land on the server's disk where you could not retrieve it.
-- **`image_page_audit`** refuses URLs resolving to private, loopback, or link-local addresses, and re-checks each redirect hop. Hosted, that tool fetches from inside the server's network, typically shared with databases and other internal services.
+- **`image_page_audit`** refuses URLs resolving to private, loopback, link-local or reserved addresses — including the IPv4-mapped IPv6 forms that URL normalisation hides — validates the address again at connect time so DNS cannot be rebound between check and connect, re-checks every redirect hop, and bounds each fetch with one deadline covering the body plus a hard byte ceiling. Hosted, that tool fetches from inside the server's network, typically shared with databases and other internal services.
 
 ---
 
-## All 31 tools
+## All 33 tools
 
 Every tool marked **P** takes an optional `site_url` to target any property your credential can see.
 
@@ -320,6 +335,8 @@ Every tool marked **P** takes an optional `site_url` to target any property your
 |------|-----------------|---|
 | `list_properties` | Which properties can this account access, and which is the default | |
 | `set_default_property` | Save the signed-in user's own default property (hosted per-user mode) | |
+| `disconnect_account` | Erase everything the server stores for you and end your sessions (hosted mode) | |
+| `export_my_data` | Show everything the server stores about you (hosted mode) | |
 | `multi_site_dashboard` | Health check across many properties at once (takes `site_urls`) | |
 
 ### Analysis
@@ -411,6 +428,16 @@ Tool descriptions carry explicit instructions to base analysis only on returned 
 | `GSC_OAUTH_DB_FILE` | No | SQLite path (default `~/.gsc-mcp/oauth-server.db`) |
 | `GSC_VAULT_KEY_FILE` | No | Vault key path (default `~/.gsc-mcp/vault.key`, auto-created 0600) |
 
+### Limits
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `GSC_MAX_SESSIONS` | 120 | Concurrent MCP sessions server-wide; `503` beyond it |
+| `GSC_MAX_SESSIONS_PER_USER` | 8 | Concurrent sessions one user may hold; `429` beyond it |
+| `GSC_RATE_LIMIT_PER_MIN` | 60 | Requests per user per minute; `429` with `Retry-After` |
+| `GSC_MAX_TOTAL_ROWS` | 100000 | Rows one Search Analytics query may accumulate; results say when truncated |
+| `GSC_REPORT_DIR` | cwd | Directory `generate_report` may write into; paths are confined to it |
+
 ---
 
 ## Credits
@@ -424,6 +451,8 @@ The anti-hallucination guardrail approach came from feedback by [Krinal Mehta](h
 ---
 
 ## Changelog
+
+**v3.3.0** — Security and resource hardening, from a production-readiness audit of v3.2.0 (seven independent reviewers, every finding adversarially verified). Each fix below was reproduced before and after. The SSRF guard missed IPv4-mapped IPv6 entirely: `http://[::ffff:127.0.0.1]/` normalises to the hex form `::ffff:7f00:1`, which the dotted-decimal check never matched, so loopback and the cloud metadata endpoint were both reachable from the hosted server. Address classification now works on expanded 16-bit groups and covers mapped, compatible, translated and NAT64 forms. All fetching moved behind one helper that owns the whole request: the deadline now covers the response body (it previously ended when headers arrived, leaving downloads unbounded in time and size), bytes are capped while streaming rather than after buffering, addresses are re-validated at connect time so DNS cannot be rebound between check and connect, and every redirect hop is re-checked. `/authorize` no longer forwards straight to Google — because dynamic client registration is open to any caller, it stops at a consent page naming the requesting application and the exact host that would receive the result, warning when that host is not a Claude address. Session and rate limits (`GSC_MAX_SESSIONS`, `GSC_MAX_SESSIONS_PER_USER`, `GSC_RATE_LIMIT_PER_MIN`) stop one caller exhausting the heap: each session costs ~440 KB, so ~900 of them previously aborted the process and took every other tenant with it. Search Analytics pagination gained a row ceiling (`GSC_MAX_TOTAL_ROWS`) that reports truncation instead of accumulating without limit. `generate_report` writes only inside `GSC_REPORT_DIR` (default cwd). New `disconnect_account` and `export_my_data` tools make the deletion and access controls the documentation already described actually exist; revoking a Google grant now erases the stored credential rather than only flagging it, and unused client registrations are swept. `multi_site_dashboard` no longer throws when `GSC_SITE_URL` is unset — it was broken for exactly the multi-property configuration this fork exists to support — and its fan-out is bounded. `submit_url`/`submit_batch` refuse to run in hosted per-user mode rather than silently using the server's own credential. New regression suite: `scripts/check-hardening.mjs`.
 
 **v3.2.0** — Per-user Google sign-in. `GSC_HTTP_AUTH=oauth` turns the remote server into a full MCP OAuth authorization + resource server (discovery metadata, dynamic client registration, PKCE via the official SDK's auth router), so anyone can add it by URL in claude.ai, Claude Desktop, or Claude Code and sign in with their own Google account — Google's own property permissions then decide what each person sees. Architecture: the server mints its own opaque, hashed, rotating tokens for Claude; the user's Google refresh token is held server-side, AES-256-GCM-encrypted under a key file beside the SQLite database (`node:sqlite`, no native deps). Refresh-token reuse burns the client's sessions; a Google-side revocation cascades so the next request re-runs sign-in. Per-request user context flows through AsyncLocalStorage into the same two functions every tool already used, so all 31 tools became per-user without changing — plus the new `set_default_property` for a personal default. Sessions are owner-bound: a valid token belonging to another user is rejected with 403. Bearer mode remains the default and unchanged; OAuth mode forces the read-only scope. Runtime for OAuth mode: Node 24+ (Docker image bumped). 47-check credential-free test suite in `scripts/check-oauth.mjs`.
 

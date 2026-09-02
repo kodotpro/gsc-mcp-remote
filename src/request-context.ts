@@ -27,6 +27,15 @@ export interface UserContext {
     getDefaultProperty(): string | undefined;
     setDefaultProperty(property: string): void;
   };
+  /**
+   * Erases everything this server holds for the user. Present only in the
+   * hosted per-user mode; the README and the Google verification documents
+   * both promise this control exists.
+   */
+  account: {
+    disconnect(): { deleted: Record<string, number> };
+    exportData(): Record<string, unknown> | null;
+  };
 }
 
 const als = new AsyncLocalStorage<UserContext>();

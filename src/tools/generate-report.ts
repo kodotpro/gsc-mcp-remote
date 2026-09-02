@@ -1,4 +1,5 @@
 import * as fs from "fs";
+import * as path from "path";
 import { siteSnapshot } from "./site-snapshot.js";
 import { quickWins } from "./quick-wins.js";
 import { trafficDrops } from "./traffic-drops.js";
@@ -26,6 +27,38 @@ const ALL_SECTIONS = [
   "recommendations",
 ];
 
+/**
+ * Resolves where a report may be written.
+ *
+ * The path arrives as a tool argument, which means a model can be talked into
+ * supplying it by content it read elsewhere — so an unconfined write is a way
+ * to clobber arbitrary files (ssh keys, crontabs, this repo's own source).
+ * Reports are therefore confined to one directory: the current working
+ * directory by default, or GSC_REPORT_DIR when the operator sets one.
+ * Only the basename of the caller's path is honoured.
+ */
+export function confineReportPath(outputPath: string | undefined, date: string): string {
+  const baseDir = path.resolve(process.env.GSC_REPORT_DIR?.trim() || process.cwd());
+  const requested = outputPath?.trim();
+  const name = requested ? path.basename(requested) : `gsc-report-${date}.md`;
+
+  // basename() already strips traversal, but an empty or dot-only remainder
+  // (".", "..", "/") would resolve back to the directory itself.
+  const safeName = /^[.\s]*$/.test(name) ? `gsc-report-${date}.md` : name;
+  const resolved = path.resolve(baseDir, safeName);
+
+  if (resolved !== path.join(baseDir, safeName) || path.dirname(resolved) !== baseDir) {
+    throw new Error(
+      `Refusing to write the report outside ${baseDir}. Pass a plain filename, ` +
+      `or set GSC_REPORT_DIR to choose the directory.`
+    );
+  }
+  if (!safeName.toLowerCase().endsWith(".md")) {
+    return `${resolved}.md`;
+  }
+  return resolved;
+}
+
 export async function generateReport(
   outputPath?: string,
   days: number = 28,
@@ -38,7 +71,7 @@ export async function generateReport(
 
   const siteUrl = resolveSiteUrl(siteUrlOverride);
   const date = new Date().toISOString().split("T")[0];
-  const filePath = outputPath || `./gsc-report-${date}.md`;
+  const filePath = confineReportPath(outputPath, date);
 
   // Every composed tool receives the resolved property, so a report for one
   // property can never mix in numbers from the configured default.

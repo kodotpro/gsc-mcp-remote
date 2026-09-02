@@ -29,5 +29,9 @@ Modifications in this fork (see README for detail):
   - Added per-user Google sign-in (MCP OAuth authorization server with DCR and
     PKCE, per-user encrypted token vault, per-request user context), so a
     hosted instance serves many users, each seeing only their own properties.
+  - Security and resource hardening: corrected SSRF address classification,
+    connect-time address validation, bounded fetches, an authorization consent
+    interstitial, session and rate limits, a row ceiling on Search Analytics
+    pagination, report-path confinement, and user data deletion/export.
 
 This fork is not affiliated with or endorsed by the original author.

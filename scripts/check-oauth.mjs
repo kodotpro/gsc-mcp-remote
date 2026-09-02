@@ -90,18 +90,49 @@ check("clientsStore round-trip", provider.clientsStore.getClient("client-abc")?.
 const verifier = randomBytes(32).toString("base64url");
 const challenge = createHash("sha256").update(verifier).digest("base64url");
 
-// authorize() parks and redirects to Google
-let googleRedirect = "";
+// A minimal express-like response recorder.
+const mockRes = () => {
+  const r = { html: "", redirected: "", headers: {} };
+  r.setHeader = (k, v) => { r.headers[k.toLowerCase()] = v; };
+  r.send = (body) => { r.html = body; };
+  r.redirect = (url) => { r.redirected = url; };
+  return r;
+};
+
+// authorize() must NOT go straight to Google: it renders a consent page that
+// names the client and where the code would be delivered. This is the gate
+// that stops an attacker-registered client from silently harvesting a code.
+const res1 = mockRes();
 await provider.authorize(client, {
   state: "client-state-xyz",
   codeChallenge: challenge,
   redirectUri: client.redirect_uris[0],
   scopes: [],
   resource: new URL(RESOURCE),
-}, { redirect: (url) => { googleRedirect = url; } });
-check("authorize redirects to Google", googleRedirect.startsWith("https://accounts.google.com/"));
+}, res1);
+check("authorize does NOT redirect straight to Google", res1.redirected === "", res1.redirected);
+check("authorize renders a consent page", res1.html.includes("Connect your Google Search Console"));
+check("consent page names the requesting client", res1.html.includes("claude.ai") || res1.html.includes("Unnamed application"));
+check("consent page requires a POST to continue", res1.html.includes('method="POST"') && res1.html.includes("/oauth/consent"));
+
+const pid = (res1.html.match(/name="pending_id" value="([^"]+)"/) || [])[1];
+check("consent page carries an unguessable pending id", Boolean(pid && pid.startsWith("pend_") && pid.length > 30));
+
+// A client whose redirect target is not a Claude endpoint must be flagged.
+const evil = { client_id: "client-evil", client_id_issued_at: 0, redirect_uris: ["https://attacker.example/steal"], token_endpoint_auth_method: "none", client_name: "Google Search Console (official)" };
+provider.clientsStore.registerClient(evil);
+const res2 = mockRes();
+await provider.authorize(evil, { codeChallenge: challenge, redirectUri: evil.redirect_uris[0], scopes: [] }, res2);
+check("untrusted redirect host is warned about", res2.html.includes("not a Claude address") && res2.html.includes("attacker.example"));
+const evilPid = (res2.html.match(/name="pending_id" value="([^"]+)"/) || [])[1];
+provider.denyPending(evilPid);
+await expectThrow("denied request cannot be approved afterwards", () => Promise.resolve(provider.approvePending(evilPid)), "expired");
+
+// Approving returns the Google URL and keeps the parked request alive.
+const googleRedirect = provider.approvePending(pid);
+check("approving sends the person to Google", googleRedirect.startsWith("https://accounts.google.com/"));
 const state = new URL(googleRedirect).searchParams.get("state");
-check("redirect carries an unguessable state", Boolean(state && state.length > 30));
+check("Google link carries the pending id as state", state === pid);
 
 // Google callback completes the sandwich
 const backToClient = await provider.completeGoogleSignIn(state, "good-google-code");
@@ -143,9 +174,10 @@ await expectThrow("reuse burned the NEW refresh token too", () => provider.excha
 await expectThrow("reuse burned the new access token too", () => provider.verifyAccessToken(rotated.access_token));
 
 // Sign in again, then test the invalid_grant cascade and per-user settings.
-let redirect2 = "";
-await provider.authorize(client, { codeChallenge: challenge, redirectUri: client.redirect_uris[0], scopes: [] }, { redirect: (u) => { redirect2 = u; } });
-const state2 = new URL(redirect2).searchParams.get("state");
+const res3 = mockRes();
+await provider.authorize(client, { codeChallenge: challenge, redirectUri: client.redirect_uris[0], scopes: [] }, res3);
+const pid2 = (res3.html.match(/name="pending_id" value="([^"]+)"/) || [])[1];
+const state2 = new URL(provider.approvePending(pid2)).searchParams.get("state");
 const code2 = new URL(await provider.completeGoogleSignIn(state2, "good-google-code")).searchParams.get("code");
 const tokens2 = await provider.exchangeAuthorizationCode(client, code2, verifier);
 const info2 = await provider.verifyAccessToken(tokens2.access_token);
@@ -217,9 +249,44 @@ try {
 
   const authorizeUrl = `${asMeta.authorization_endpoint}?response_type=code&client_id=${encodeURIComponent(regBody.client_id)}&redirect_uri=${encodeURIComponent("http://127.0.0.1:41419/callback")}&code_challenge=${challenge}&code_challenge_method=S256&state=cs`;
   const authz = await fetch(authorizeUrl, { redirect: "manual" });
-  const loc = authz.headers.get("location") ?? "";
-  check("/authorize redirects to Google consent", authz.status === 302 && loc.startsWith("https://accounts.google.com/"), `status ${authz.status}, location ${loc.slice(0, 80)}`);
-  check("Google redirect carries our pending state", /[?&]state=pend_/.test(loc));
+  const authzBody = await authz.text();
+  check("/authorize shows a consent page rather than redirecting", authz.status === 200 && authzBody.includes("Connect your Google Search Console"), `status ${authz.status}`);
+  // This client registered a loopback redirect, which only the person's own
+  // machine can receive — so it is trusted and must NOT be warned about.
+  check("loopback redirect is not warned about", !authzBody.includes("not a Claude address"));
+
+  // Now the attacker shape: an off-host https redirect must be flagged.
+  const evilReg = await fetch(asMeta.registration_endpoint, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ client_name: "Google Search Console (official)", redirect_uris: ["https://attacker.example/steal"], token_endpoint_auth_method: "none", grant_types: ["authorization_code"], response_types: ["code"] }),
+  });
+  const evilBody = await evilReg.json();
+  const evilAuthz = await fetch(
+    `${asMeta.authorization_endpoint}?response_type=code&client_id=${encodeURIComponent(evilBody.client_id)}&redirect_uri=${encodeURIComponent("https://attacker.example/steal")}&code_challenge=${challenge}&code_challenge_method=S256&state=cs`,
+    { redirect: "manual" }
+  );
+  const evilHtml = await evilAuthz.text();
+  check("off-host redirect is warned about on the consent page", evilHtml.includes("not a Claude address") && evilHtml.includes("attacker.example"), `status ${evilAuthz.status}`);
+  check("the attacker's client name is shown, not trusted branding", evilHtml.includes("Google Search Console (official)"));
+
+  // Cancelling must discard the parked request.
+  const pendId = (authzBody.match(/name="pending_id" value="([^"]+)"/) || [])[1];
+  const denied = await fetch(`${BASE}/oauth/consent`, {
+    method: "POST",
+    headers: { "content-type": "application/x-www-form-urlencoded" },
+    body: new URLSearchParams({ pending_id: pendId ?? "", decision: "deny" }).toString(),
+    redirect: "manual",
+  });
+  check("cancelling on the consent page is honoured", denied.status === 200 && (await denied.text()).includes("Request cancelled"), `status ${denied.status}`);
+
+  const reuseDenied = await fetch(`${BASE}/oauth/consent`, {
+    method: "POST",
+    headers: { "content-type": "application/x-www-form-urlencoded" },
+    body: new URLSearchParams({ pending_id: pendId ?? "", decision: "allow" }).toString(),
+    redirect: "manual",
+  });
+  check("a cancelled request cannot then be approved", reuseDenied.status === 400, `got ${reuseDenied.status}`);
 
   const noTok = await fetch(`${BASE}/mcp`, { method: "POST", headers: { "content-type": "application/json", accept: "application/json, text/event-stream" }, body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "initialize", params: {} }) });
   check("POST /mcp without a token is 401", noTok.status === 401, `got ${noTok.status}`);
@@ -268,7 +335,7 @@ try {
   await rpc(TOKEN_A, sidA, { jsonrpc: "2.0", method: "notifications/initialized" });
 
   const listA = await (await rpc(TOKEN_A, sidA, { jsonrpc: "2.0", id: 2, method: "tools/list" })).json();
-  check("user A sees the full tool set", listA?.result?.tools?.length === 31, `got ${listA?.result?.tools?.length}`);
+  check("user A sees the full tool set", listA?.result?.tools?.length === 33, `got ${listA?.result?.tools?.length}`);
 
   // Invariant #1: a session opened by A must reject B's valid token.
   const crossed = await rpc(TOKEN_B, sidA, { jsonrpc: "2.0", id: 3, method: "tools/list" });

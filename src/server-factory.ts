@@ -58,7 +58,7 @@ const SITE_URL_PARAM = z
     "Defaults to the configured property. Call list_properties to see what this account can access."
   );
 
-export const SERVER_VERSION = "3.2.0";
+export const SERVER_VERSION = "3.3.0";
 
 export function createServer(): McpServer {
   const server = new McpServer({
@@ -493,6 +493,73 @@ function registerTools(server: McpServer): void {
           text: `Default property saved: ${property}. Tool calls without site_url now use it. It stays saved across sessions until changed.`,
         }],
       };
+    }
+  );
+
+  // 32. Disconnect account (hosted multi-user mode)
+  server.tool(
+    "disconnect_account",
+    "Disconnect this Google account from the server and erase everything it stores for you: the saved Google connection, all access and refresh tokens, and your saved default property. Your open sessions end immediately. This does not revoke the app on Google's side — do that at myaccount.google.com/permissions if you also want it gone there. Only meaningful on a hosted deployment with per-user sign-in." + GUARDRAIL_SUFFIX,
+    {
+      confirm: z
+        .boolean()
+        .describe("Must be true. Deleting the connection cannot be undone; reconnecting means signing in with Google again."),
+    },
+    async ({ confirm }) => {
+      const ctx = getUserContext();
+      if (!ctx) {
+        return {
+          content: [{
+            type: "text",
+            text: "This server runs in single-user mode, so there is no per-user connection to disconnect. Remove the server from your client's config, and delete ~/.gsc-mcp/ to drop the cached Google token.",
+          }],
+        };
+      }
+      if (!confirm) {
+        return {
+          content: [{
+            type: "text",
+            text: "Nothing was deleted. Call again with confirm: true to disconnect and erase the stored connection.",
+          }],
+        };
+      }
+      const { deleted } = ctx.account.disconnect();
+      const rows = Object.entries(deleted).map(([k, v]) => `${k}: ${v}`).join(", ");
+      return {
+        content: [{
+          type: "text",
+          text: `Disconnected. Everything this server held for ${ctx.email ?? "your account"} is deleted (${rows}). ` +
+                `Your Google grant may still be listed at myaccount.google.com/permissions — remove it there too if you want. ` +
+                `To use the server again, reconnect from your Claude client.`,
+        }],
+      };
+    }
+  );
+
+  // 33. Export my data (hosted multi-user mode)
+  server.tool(
+    "export_my_data",
+    "Show everything this server stores about the signed-in user: identity, the status of the Google connection, saved settings, and how many active tokens exist. Never includes the stored Google credential itself. Only meaningful on a hosted deployment with per-user sign-in." + GUARDRAIL_SUFFIX,
+    {},
+    async () => {
+      const ctx = getUserContext();
+      if (!ctx) {
+        return {
+          content: [{
+            type: "text",
+            text: "This server runs in single-user mode and keeps no user database. The only stored state is the Google token cache in ~/.gsc-mcp/ on this machine.",
+          }],
+        };
+      }
+      const data = ctx.account.exportData();
+      const wrapped = withMeta(
+        data ?? { note: "No stored record found for this account." },
+        "export_my_data",
+        {},
+        "This server's own user database",
+        "This is the complete set of fields stored about the signed-in user. The encrypted Google refresh token is deliberately excluded."
+      );
+      return { content: [{ type: "text", text: JSON.stringify(wrapped, null, 2) }] };
     }
   );
 

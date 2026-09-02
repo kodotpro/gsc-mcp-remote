@@ -25,11 +25,13 @@ import { InvalidGrantError, InvalidTokenError, InvalidTargetError, AccessDeniedE
 import type { AuthDb } from "./db.js";
 import { newToken, sha256hex, vaultEncrypt, vaultDecrypt } from "./crypto.js";
 import type { GoogleIdentityLike } from "./google-identity.js";
+import { consentPage, redirectsAreRecognised } from "./consent.js";
 
 const ACCESS_TTL_MS = 60 * 60 * 1000;            // 1 hour
 const REFRESH_TTL_MS = 30 * 24 * 60 * 60 * 1000; // 30 days
 const CODE_TTL_MS = 60 * 1000;                   // 1 minute
 const PENDING_TTL_MS = 10 * 60 * 1000;           // consent-screen dwell time
+const CLIENT_TTL_MS = 7 * 24 * 60 * 60 * 1000;   // unused registrations are swept
 
 /** The one scope this server issues; requests are normalised onto it. */
 export const MCP_SCOPE = "gsc:read";
@@ -75,7 +77,15 @@ export class GscOAuthProvider implements OAuthServerProvider {
 
   // ---- the sandwich -------------------------------------------------------
 
-  /** Parks the client's request and forwards the human to Google. */
+  /**
+   * Parks the client's request and shows the consent page.
+   *
+   * It deliberately does NOT redirect straight to Google. Google's screen is
+   * branded with this server's app name and shows the scope the person
+   * expects, so it cannot reveal the one fact that matters here: which client
+   * receives the resulting code. Registration is open to unauthenticated
+   * callers, so that fact has to be shown, and confirmed, by us.
+   */
   async authorize(client: OAuthClientInformationFull, params: AuthorizationParams, res: Response): Promise<void> {
     const pendingId = newToken("pend");
     this.db.prepare(
@@ -92,7 +102,37 @@ export class GscOAuthProvider implements OAuthServerProvider {
       params.resource ? params.resource.toString() : null,
       Date.now() + PENDING_TTL_MS
     );
-    res.redirect(this.identity.authUrl(pendingId));
+
+    res.setHeader("Content-Type", "text/html; charset=utf-8");
+    res.setHeader("Cache-Control", "no-store");
+    res.send(consentPage({
+      pendingId,
+      clientName: client.client_name || "Unnamed application",
+      clientId: client.client_id,
+      redirectUri: params.redirectUri,
+      scopeSummary: "Read your Google Search Console data (read-only)",
+      recognised: redirectsAreRecognised(client),
+    }));
+  }
+
+  /**
+   * Called when the person accepts on the consent page: returns the Google
+   * URL to send them to. The pending row is left in place — the Google
+   * callback consumes it.
+   */
+  approvePending(pendingId: string): string {
+    const row = this.db.prepare(
+      "SELECT id, expires_at FROM pending_authorizations WHERE id = ?"
+    ).get(pendingId) as { id: string; expires_at: number } | undefined;
+    if (!row || row.expires_at < Date.now()) {
+      throw new AccessDeniedError("This authorization request expired. Start the connection again from your client.");
+    }
+    return this.identity.authUrl(pendingId);
+  }
+
+  /** Called when the person cancels: the parked request is discarded. */
+  denyPending(pendingId: string): void {
+    this.db.prepare("DELETE FROM pending_authorizations WHERE id = ?").run(pendingId);
   }
 
   /**
@@ -306,9 +346,55 @@ export class GscOAuthProvider implements OAuthServerProvider {
    * own — recovery is self-service by construction.
    */
   markGoogleRevoked(userId: string): void {
-    this.db.prepare("UPDATE google_tokens SET status = 'revoked', updated_at = ? WHERE user_id = ?").run(Date.now(), userId);
+    // Overwrite the ciphertext rather than only flipping a status flag: the
+    // grant is dead, so keeping an encrypted copy of someone's Google refresh
+    // token is retained data with no purpose and real breach value.
+    this.db.prepare(
+      "UPDATE google_tokens SET refresh_token_enc = '', status = 'revoked', updated_at = ? WHERE user_id = ?"
+    ).run(Date.now(), userId);
     this.db.prepare("DELETE FROM access_tokens WHERE user_id = ?").run(userId);
     this.db.prepare("UPDATE refresh_tokens SET revoked = 1 WHERE user_id = ?").run(userId);
+  }
+
+  /**
+   * Full disconnect: erases everything this server holds for the user.
+   *
+   * The README and the Google verification documents both state that
+   * disconnecting deletes the stored token — this is the code that makes that
+   * true. Their Google grant is theirs to revoke at myaccount.google.com; this
+   * removes our side entirely.
+   */
+  disconnectUser(userId: string): { deleted: Record<string, number> } {
+    const counts: Record<string, number> = {};
+    const run = (label: string, sql: string) => {
+      const info = this.db.prepare(sql).run(userId);
+      counts[label] = Number(info.changes ?? 0);
+    };
+    run("google_credentials", "DELETE FROM google_tokens WHERE user_id = ?");
+    run("access_tokens", "DELETE FROM access_tokens WHERE user_id = ?");
+    run("refresh_tokens", "DELETE FROM refresh_tokens WHERE user_id = ?");
+    run("saved_settings", "DELETE FROM user_settings WHERE user_id = ?");
+    run("auth_codes", "DELETE FROM auth_codes WHERE user_id = ?");
+    // users last: the other tables reference it.
+    run("identity", "DELETE FROM users WHERE id = ?");
+    return { deleted: counts };
+  }
+
+  /** What the server holds about a user, for a data-export request. */
+  exportUser(userId: string): Record<string, unknown> | null {
+    const user = this.db.prepare("SELECT id, google_sub, email, created_at, last_seen_at FROM users WHERE id = ?").get(userId);
+    if (!user) return null;
+    const google = this.db.prepare("SELECT scope, status, updated_at FROM google_tokens WHERE user_id = ?").get(userId);
+    const settings = this.db.prepare("SELECT default_property FROM user_settings WHERE user_id = ?").get(userId);
+    const active = this.db.prepare("SELECT COUNT(*) AS n FROM access_tokens WHERE user_id = ?").get(userId) as { n: number };
+    return {
+      identity: user,
+      // Deliberately never includes refresh_token_enc: exporting the encrypted
+      // credential would hand out the very thing the vault exists to protect.
+      google_connection: google ?? null,
+      settings: settings ?? null,
+      active_access_tokens: active?.n ?? 0,
+    };
   }
 
   private revokeClientTokensForUser(userId: string, clientId: string): void {
@@ -336,5 +422,15 @@ export class GscOAuthProvider implements OAuthServerProvider {
     this.db.prepare("DELETE FROM auth_codes WHERE expires_at < ?").run(now);
     this.db.prepare("DELETE FROM access_tokens WHERE expires_at < ?").run(now);
     this.db.prepare("DELETE FROM refresh_tokens WHERE expires_at < ?").run(now);
+
+    // Registrations are created by unauthenticated callers, so without this
+    // the table only ever grows and a hostile registration lives forever.
+    // Anything old that never produced a token is dropped.
+    this.db.prepare(
+      `DELETE FROM oauth_clients
+        WHERE created_at < ?
+          AND client_id NOT IN (SELECT DISTINCT client_id FROM access_tokens)
+          AND client_id NOT IN (SELECT DISTINCT client_id FROM refresh_tokens WHERE revoked = 0)`
+    ).run(now - CLIENT_TTL_MS);
   }
 }

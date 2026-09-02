@@ -41,3 +41,8 @@ jobs:
       # binding. Skips itself on Node without node:sqlite (18/20).
       - name: OAuth mode checks
         run: node scripts/check-oauth.mjs
+
+      # Regression tests for the production-audit fixes: SSRF address
+      # classification, fetch deadlines/byte caps, report path confinement.
+      - name: Hardening regression tests
+        run: node scripts/check-hardening.mjs

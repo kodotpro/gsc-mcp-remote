@@ -1,5 +1,5 @@
 import { fetchAllRows, getDateRange, getPriorDateRange } from "../analytics.js";
-import { getConfig } from "../auth.js";
+import { configuredSiteUrls, defaultSiteUrl } from "../auth.js";
 
 interface SiteHealth {
   siteUrl: string;
@@ -79,26 +79,60 @@ async function siteSnapshotForUrl(
   };
 }
 
+/** Concurrent property snapshots; each one paginates, so this is not free. */
+const MAX_CONCURRENCY = 4;
+const MAX_PROPERTIES = 25;
+
+async function mapLimited<T, R>(items: T[], limit: number, fn: (item: T) => Promise<R>): Promise<R[]> {
+  const out: R[] = new Array(items.length);
+  let next = 0;
+  const workers = new Array(Math.min(limit, items.length)).fill(0).map(async () => {
+    while (true) {
+      const i = next++;
+      if (i >= items.length) return;
+      out[i] = await fn(items[i]);
+    }
+  });
+  await Promise.all(workers);
+  return out;
+}
+
 export async function multiSiteDashboard(
   siteUrls?: string[],
   days: number = 28
 ): Promise<MultiSiteDashboardResult> {
-  const config = getConfig();
+  // Deliberately does NOT call getConfig(): that throws when GSC_SITE_URL is
+  // unset, which broke this tool even when the caller named properties
+  // explicitly — and unset is the normal case both for multi-property use and
+  // for the hosted per-user deployment, where there is no process-wide default.
+  const explicit = (siteUrls ?? []).map((u) => u.trim()).filter(Boolean);
+  const configured = configuredSiteUrls();
+  const fallback = defaultSiteUrl();
 
-  const urls = siteUrls && siteUrls.length > 0
-    ? siteUrls
-    : config.siteUrls.length > 0
-      ? config.siteUrls
-      : [config.siteUrl];
+  const urls = explicit.length > 0
+    ? explicit
+    : configured.length > 0
+      ? configured
+      : fallback
+        ? [fallback]
+        : [];
 
   if (urls.length === 0) {
     throw new Error(
-      "No site URLs provided. Pass site_urls parameter or set GSC_SITE_URLS environment variable."
+      "No properties to compare. Pass site_urls with the properties you want, " +
+      "or set GSC_SITE_URLS. Call list_properties to see what this account can access."
+    );
+  }
+  if (urls.length > MAX_PROPERTIES) {
+    throw new Error(
+      `Too many properties in one call (${urls.length}). The limit is ${MAX_PROPERTIES}, ` +
+      `because each one paginates its own Search Analytics query. Split the request.`
     );
   }
 
-  // Run all site snapshots in parallel
-  const sites = await Promise.all(urls.map((url) => siteSnapshotForUrl(url, days)));
+  // Bounded fan-out: unbounded Promise.all over N paginating queries is how a
+  // large account turns one tool call into a memory and quota spike.
+  const sites = await mapLimited(urls, MAX_CONCURRENCY, (url) => siteSnapshotForUrl(url, days));
 
   const healthyCount = sites.filter((s) => s.health === "healthy").length;
   const warningCount = sites.filter((s) => s.health === "warning").length;

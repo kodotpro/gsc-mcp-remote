@@ -40,6 +40,7 @@ import { requireBearerAuth } from "@modelcontextprotocol/sdk/server/auth/middlew
 import { createServer, SERVER_VERSION } from "./server-factory.js";
 import { setRemoteMode } from "./runtime.js";
 import { runWithUserContext, type UserContext } from "./request-context.js";
+import { deniedPage } from "./auth/consent.js";
 
 type HttpAuthMode = "bearer" | "oauth";
 
@@ -58,6 +59,42 @@ const startedAt = Date.now();
 /** Sessions untouched for this long are closed by the sweeper. */
 const IDLE_TIMEOUT_MS = Number(process.env.GSC_HTTP_IDLE_TIMEOUT_MS ?? 30 * 60 * 1000);
 const SWEEP_INTERVAL_MS = 60 * 1000;
+
+/**
+ * Capacity limits.
+ *
+ * Each session holds its own McpServer with all 31 tools registered, measured
+ * at ~440 KB. Without a ceiling, roughly 900 initialize calls exhaust the
+ * container's 384 MB heap and abort the process — so one caller could take
+ * every other tenant down. These are the backstops.
+ */
+const MAX_SESSIONS = Number(process.env.GSC_MAX_SESSIONS ?? 120);
+const MAX_SESSIONS_PER_USER = Number(process.env.GSC_MAX_SESSIONS_PER_USER ?? 8);
+/** Tool calls allowed per user per minute (bearer mode counts as one user). */
+const RATE_LIMIT_PER_MIN = Number(process.env.GSC_RATE_LIMIT_PER_MIN ?? 60);
+
+/** Sliding-window counters, keyed by user id (or "shared" in bearer mode). */
+const rateBuckets = new Map<string, { count: number; resetAt: number }>();
+
+function rateLimitExceeded(key: string): { limited: boolean; retryAfter: number } {
+  const now = Date.now();
+  const bucket = rateBuckets.get(key);
+  if (!bucket || bucket.resetAt <= now) {
+    rateBuckets.set(key, { count: 1, resetAt: now + 60_000 });
+    return { limited: false, retryAfter: 0 };
+  }
+  bucket.count += 1;
+  if (bucket.count > RATE_LIMIT_PER_MIN) {
+    return { limited: true, retryAfter: Math.max(1, Math.ceil((bucket.resetAt - now) / 1000)) };
+  }
+  return { limited: false, retryAfter: 0 };
+}
+
+function sessionsOwnedBy(userId: string | null): number {
+  let n = 0;
+  for (const s of sessions.values()) if (s.userId === userId) n++;
+  return n;
+}
 
 /** Both /mcp and /mcp/ must work: connector UIs get pasted either form. */
 const MCP_PATHS = ["/mcp", "/mcp/"];
@@ -111,6 +148,20 @@ function sharedTokenMiddleware(expected: string): RequestHandler {
 }
 
 // ---------------------------------------------------------------------------
+
+/** Fully-escaped error page; browser-facing OAuth routes render through this. */
+function errorPage(heading: string, detail: string): string {
+  const esc = (v: string) =>
+    v.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;")
+     .replace(/"/g, "&quot;").replace(/'/g, "&#39;");
+  return `<!doctype html><html lang="en"><head><meta charset="utf-8">` +
+    `<meta name="viewport" content="width=device-width,initial-scale=1">` +
+    `<meta name="robots" content="noindex"><title>${esc(heading)}</title>` +
+    `<style>body{font-family:system-ui,sans-serif;max-width:32rem;margin:4rem auto;padding:0 1.5rem;` +
+    `line-height:1.6;color-scheme:light dark;background:Canvas;color:CanvasText}</style></head><body>` +
+    `<h2>${esc(heading)}</h2><p>${esc(detail)}</p>` +
+    `<p>Close this tab and start the connection again from your Claude client.</p></body></html>`;
+}
 
 async function closeSession(sessionId: string): Promise<void> {
   const session = sessions.get(sessionId);
@@ -228,6 +279,7 @@ export async function startHttpServer(): Promise<HttpServer> {
       auth: mode,
       uptimeSeconds: Math.round((Date.now() - startedAt) / 1000),
       activeSessions: sessions.size,
+      sessionLimit: MAX_SESSIONS,
     });
   });
 
@@ -246,6 +298,26 @@ export async function startHttpServer(): Promise<HttpServer> {
       })
     );
 
+    // The consent page posts here. Express's urlencoded parser is added just
+    // for this route so the JSON body parser used by /mcp is untouched.
+    app.post("/oauth/consent", express.urlencoded({ extended: false }), async (req: Request, res: Response) => {
+      const pendingId = typeof req.body?.pending_id === "string" ? req.body.pending_id : "";
+      const decision = typeof req.body?.decision === "string" ? req.body.decision : "";
+      res.setHeader("Cache-Control", "no-store");
+      try {
+        if (!pendingId) throw new Error("Missing request identifier.");
+        if (decision !== "allow") {
+          provider.denyPending(pendingId);
+          res.status(200).type("html").send(deniedPage());
+          return;
+        }
+        res.redirect(provider.approvePending(pendingId));
+      } catch (err: unknown) {
+        const message = err instanceof Error ? err.message : String(err);
+        res.status(400).type("html").send(errorPage("Could not continue", message));
+      }
+    });
+
     // The Google half of the sandwich returns here.
     app.get("/oauth/google/callback", async (req: Request, res: Response) => {
       const state = typeof req.query.state === "string" ? req.query.state : "";
@@ -259,12 +331,7 @@ export async function startHttpServer(): Promise<HttpServer> {
       } catch (err: unknown) {
         const message = err instanceof Error ? err.message : String(err);
         console.error("[oauth] google callback failed:", message);
-        res.status(400).send(
-          `<!doctype html><meta charset="utf-8"><title>Sign-in failed</title>` +
-          `<body style="font-family:system-ui;max-width:32rem;margin:4rem auto;line-height:1.5">` +
-          `<h2>Sign-in didn't complete</h2><p>${message.replace(/</g, "&lt;")}</p>` +
-          `<p>Close this tab and start the connection again from your Claude client.</p></body>`
-        );
+        res.status(400).type("html").send(errorPage("Sign-in didn't complete", message));
       }
     });
   }
@@ -301,6 +368,17 @@ export async function startHttpServer(): Promise<HttpServer> {
         getDefaultProperty: () => provider.getDefaultProperty(userId),
         setDefaultProperty: (property: string) => provider.setDefaultProperty(userId, property),
       },
+      account: {
+        disconnect: () => {
+          const result = provider.disconnectUser(userId);
+          factory.evict(userId);
+          // Drop their live sessions too, so nothing keeps serving a user
+          // whose credentials no longer exist.
+          for (const [sid, sess] of sessions) if (sess.userId === userId) void closeSession(sid);
+          return result;
+        },
+        exportData: () => provider.exportUser(userId),
+      },
     };
   };
 
@@ -319,6 +397,20 @@ export async function startHttpServer(): Promise<HttpServer> {
           return;
         }
         if (!ownsSession(req, res, session)) return;
+
+        // Per-user request budget: one tenant must not be able to saturate a
+        // shared box (or the account-wide Google quota) for everyone else.
+        const rlKey = userIdOf(req) ?? "shared";
+        const rl = rateLimitExceeded(rlKey);
+        if (rl.limited) {
+          res.status(429).set("Retry-After", String(rl.retryAfter)).json({
+            jsonrpc: "2.0",
+            error: { code: -32000, message: `Rate limit reached (${RATE_LIMIT_PER_MIN} requests/minute). Retry in ${rl.retryAfter}s.` },
+            id: null,
+          });
+          return;
+        }
+
         session.lastSeen = Date.now();
 
         const ctx = buildContext(req);
@@ -334,6 +426,25 @@ export async function startHttpServer(): Promise<HttpServer> {
         res.status(400).json({
           jsonrpc: "2.0",
           error: { code: -32000, message: "Missing mcp-session-id header; only initialize may omit it." },
+          id: null,
+        });
+        return;
+      }
+
+      // Capacity backstops, checked before a new McpServer is allocated.
+      const owner = userIdOf(req);
+      if (sessions.size >= MAX_SESSIONS) {
+        res.status(503).set("Retry-After", "30").json({
+          jsonrpc: "2.0",
+          error: { code: -32000, message: "Server is at its session limit. Close an existing session or retry shortly." },
+          id: null,
+        });
+        return;
+      }
+      if (sessionsOwnedBy(owner) >= MAX_SESSIONS_PER_USER) {
+        res.status(429).set("Retry-After", "30").json({
+          jsonrpc: "2.0",
+          error: { code: -32000, message: `You already have ${MAX_SESSIONS_PER_USER} open sessions on this server. Close one before opening another.` },
           id: null,
         });
         return;
@@ -415,6 +526,8 @@ export async function startHttpServer(): Promise<HttpServer> {
         void closeSession(sessionId);
       }
     }
+    const now = Date.now();
+    for (const [k, b] of rateBuckets) if (b.resetAt <= now) rateBuckets.delete(k);
     oauth?.provider.cleanupExpired();
   }, SWEEP_INTERVAL_MS);
   sweeper.unref();

@@ -23,6 +23,27 @@ export interface QueryParams {
   // GSC Search Analytics `type` filter. Values: web (default), image, video,
   // news, discover, googleNews. Added in v2.3 to unlock image-search data.
   type?: "web" | "image" | "video" | "news" | "discover" | "googleNews";
+  /** Hard ceiling on accumulated rows; defaults to MAX_TOTAL_ROWS. */
+  maxTotalRows?: number;
+}
+
+/**
+ * Ceiling on rows held in memory by one call.
+ *
+ * Pagination used to run until Google ran out of rows, accumulating every one
+ * in an array. A high-cardinality query (query+page dimensions over 16 months)
+ * can return hundreds of thousands of rows, and on a shared host that is
+ * enough to take the whole process — and every other tenant — down. Callers
+ * that legitimately need more can raise it per call; the result says plainly
+ * when a cut happened, so an answer is never quietly computed on partial data.
+ */
+export const MAX_TOTAL_ROWS = Number(process.env.GSC_MAX_TOTAL_ROWS ?? 100000);
+
+/** Set when the last fetchAllRows call stopped early. */
+export interface RowFetchResult {
+  rows: SearchAnalyticsRow[];
+  truncated: boolean;
+  limit: number;
 }
 
 function formatDate(date: Date): string {
@@ -62,11 +83,22 @@ export function getPriorDateRange(days: number): { startDate: string; endDate: s
  * Uses dataState: 'all' so data matches the GSC dashboard exactly.
  */
 export async function fetchAllRows(params: QueryParams, siteUrlOverride?: string): Promise<SearchAnalyticsRow[]> {
+  const { rows } = await fetchRows(params, siteUrlOverride);
+  return rows;
+}
+
+/**
+ * Same fetch, but reports whether the row ceiling cut the result short.
+ * Tools that surface totals should prefer this and pass the flag on.
+ */
+export async function fetchRows(params: QueryParams, siteUrlOverride?: string): Promise<RowFetchResult> {
   const client = await getSearchConsoleClient();
   const siteUrl = resolveSiteUrl(siteUrlOverride);
   const allRows: SearchAnalyticsRow[] = [];
-  const pageSize = params.rowLimit || 25000;
+  const maxTotal = Math.max(1, params.maxTotalRows ?? MAX_TOTAL_ROWS);
+  const pageSize = Math.min(params.rowLimit || 25000, maxTotal);
   let startRow = 0;
+  let truncated = false;
 
   while (true) {
     const response = await client.searchanalytics.query({
@@ -98,9 +130,16 @@ export async function fetchAllRows(params: QueryParams, siteUrlOverride?: string
       });
     }
 
+    if (allRows.length >= maxTotal) {
+      // Stop before the next page rather than after it: the point is to bound
+      // peak memory, not to report a tidy number.
+      truncated = allRows.length > maxTotal || rows.length === pageSize;
+      allRows.length = Math.min(allRows.length, maxTotal);
+      break;
+    }
     if (rows.length < pageSize) break;
     startRow += pageSize;
   }
 
-  return allRows;
+  return { rows: allRows, truncated, limit: maxTotal };
 }

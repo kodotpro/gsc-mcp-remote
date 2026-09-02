@@ -48,6 +48,8 @@ const NEEDS_SITE_URL = [
 //   list_properties is the discovery call itself;
 //   image_page_audit fetches pages and never queries Search Console.
 const NO_SITE_URL = [
+  "disconnect_account",
+  "export_my_data",
   "multi_site_dashboard",
   "submit_url",
   "submit_batch",

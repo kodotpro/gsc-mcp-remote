@@ -1,10 +1,24 @@
 import { google } from "googleapis";
 import { getAuthMode } from "../auth.js";
+import { getUserContext } from "../request-context.js";
 import { authenticateWithOAuth, getScopeTier } from "../oauth.js";
 import * as fs from "fs";
 
 async function getIndexingClient() {
   const mode = getAuthMode();
+
+  // Multi-user hosted mode: this path authenticates via google.options(),
+  // which is PROCESS-GLOBAL — it would act as the server's own credential, not
+  // as the caller, and would leak that identity into other tenants' requests.
+  // The Indexing API also needs a write scope the hosted deployment never
+  // requests. Refuse rather than do the wrong thing quietly.
+  if (getUserContext()) {
+    throw new Error(
+      "URL submission is not available on this hosted server. It runs read-only and per-user, " +
+      "and the Indexing API needs write access the server never requests. " +
+      "Run the server locally (stdio) with GSC_SCOPES=full to submit URLs for your own sites."
+    );
+  }
 
   if (mode === "oauth" && getScopeTier() === "readonly") {
     throw new Error(
