@@ -40,3 +40,24 @@ Modifications in this fork (see README for detail):
     replication of the token database.
 
 This fork is not affiliated with or endorsed by the original author.
+
+---
+
+Bundled web fonts
+-----------------
+
+The public pages serve two fonts from src/fonts/ (latin subsets, woff2). Both
+are licensed under the SIL Open Font License, Version 1.1, which permits
+bundling and redistribution with this software:
+
+  Manrope
+  Copyright Mikhail Sharanda
+  https://github.com/sharanda/manrope
+
+  Instrument Serif
+  Copyright The Instrument Serif Project Authors
+  https://github.com/Instrument/instrument-serif
+
+The OFL requires that these fonts not be sold on their own and that this notice
+accompany them. Neither font is modified here beyond subsetting to latin.
+A full copy of the licence: https://openfontlicense.org/

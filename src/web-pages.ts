@@ -8,46 +8,17 @@
  * there is no second thing to host.
  *
  * The privacy text is written from what the code actually does. Two claims in
- * particular are load-bearing for a reviewer and are true here: the server
- * requests only `webmasters.readonly`, and `disconnect_account` erases the
- * stored credential rather than flagging it (see provider.disconnectUser).
- * Keep them in step with the code — a privacy policy that overstates is worse
- * than none.
+ * particular are load-bearing for a reviewer and are true here: the hosted
+ * sign-in requests only `webmasters.readonly` (see GOOGLE_SCOPES in
+ * auth/google-identity.ts), and `disconnect_account` erases the stored
+ * credential rather than flagging it (see provider.disconnectUser). Keep them
+ * in step with the code — a privacy policy that overstates is worse than none.
+ *
+ * Presentation lives in web-theme.ts, which carries k-o.pro's design language
+ * within what the Content-Security-Policy allows.
  */
 
-const esc = (v: string): string =>
-  v.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;")
-   .replace(/"/g, "&quot;").replace(/'/g, "&#39;");
-
-const STYLE = `
- :root{color-scheme:light dark}
- *{box-sizing:border-box}
- body{font-family:system-ui,-apple-system,"Segoe UI",sans-serif;line-height:1.65;margin:0;
-      background:Canvas;color:CanvasText}
- .wrap{max-width:44rem;margin:0 auto;padding:3rem 1.5rem 4rem}
- h1{font-size:1.75rem;line-height:1.25;margin:0 0 .5rem}
- h2{font-size:1.1rem;margin:2.25rem 0 .6rem}
- p,li{margin:0 0 .9rem}
- ul{padding-left:1.25rem}
- code{font-family:ui-monospace,Menlo,monospace;font-size:.88em;
-      background:color-mix(in srgb,CanvasText 8%,transparent);padding:.12em .38em;border-radius:4px}
- pre{background:color-mix(in srgb,CanvasText 6%,transparent);padding:.9rem 1.1rem;border-radius:8px;
-     overflow-x:auto;font-size:.86rem}
- pre code{background:none;padding:0}
- .lede{font-size:1.06rem;opacity:.88}
- .meta{font-size:.86rem;opacity:.65;margin-top:2.5rem;border-top:1px solid color-mix(in srgb,CanvasText 18%,transparent);padding-top:1rem}
- a{color:inherit;text-decoration-color:color-mix(in srgb,CanvasText 45%,transparent)}
- table{border-collapse:collapse;width:100%;font-size:.92rem;margin:0 0 1rem}
- th,td{text-align:left;padding:.45rem .6rem;border-bottom:1px solid color-mix(in srgb,CanvasText 15%,transparent);vertical-align:top}
- th{font-weight:600;opacity:.75}
-`;
-
-function shell(title: string, body: string): string {
-  return `<!doctype html><html lang="en"><head><meta charset="utf-8">
-<meta name="viewport" content="width=device-width,initial-scale=1">
-<title>${esc(title)}</title><style>${STYLE}</style></head>
-<body><div class="wrap">${body}</div></body></html>`;
-}
+import { esc, shell } from "./web-theme.js";
 
 export interface SiteInfo {
   /** Public base URL, e.g. https://gsc.example.com */
@@ -58,70 +29,126 @@ export interface SiteInfo {
   repoUrl?: string;
   /** Whether this instance actually offers per-user Google sign-in. */
   perUserSignIn: boolean;
+  /** Star count for the header link; omitted when GitHub could not be reached. */
+  stars?: number;
 }
 
+/**
+ * Wording note: "Google Search Console MCP" is the phrase people actually
+ * search for (390/mo US, and roughly doubling quarter on quarter as of
+ * 2026-09), well ahead of "search console mcp", "gsc mcp" and
+ * "seo mcp server". It leads the title and the h1 for that reason; the rest of
+ * the page is written to be read, not to repeat it.
+ */
 export function landingPage(info: SiteInfo): string {
   const mcpUrl = `${info.publicUrl}/mcp`;
-  const contact = info.contactEmail
-    ? `<p>Questions, or a problem with the service: <a href="mailto:${esc(info.contactEmail)}">${esc(info.contactEmail)}</a>.</p>`
-    : "";
-  const repo = info.repoUrl
-    ? `<p>This service is open source. The code that runs here is at <a href="${esc(info.repoUrl)}" rel="noopener">${esc(info.repoUrl)}</a>, and you can run your own copy instead of using this one.</p>`
-    : "";
 
   const connect = info.perUserSignIn
-    ? `<h2>Connecting</h2>
-  <p>Add it as a custom connector in your Claude client and sign in with Google when the browser opens:</p>
-  <pre><code>${esc(mcpUrl)}</code></pre>
-  <p>In claude.ai: <strong>Settings → Connectors → Add custom connector</strong>, and paste that URL. In Claude Code:</p>
-  <pre><code>claude mcp add --transport http gsc ${esc(mcpUrl)}</code></pre>
-  <p>You sign in with your own Google account. Google's own Search Console
-     permissions decide what you can see — this service cannot show you a
-     property Google would not show you, and it never gains write access.</p>`
-    : `<h2>Connecting</h2>
-  <p>This instance is configured for a single operator with a shared token
-     rather than per-user Google sign-in, so it is not open for public
-     sign-ups. If you reached this page looking for the software itself, the
-     repository below explains how to run your own.</p>`;
+    ? `<div class="step">
+    <h3>1. Add the connector</h3>
+    <p>In claude.ai, open <strong>Settings &rarr; Connectors &rarr; Add custom
+       connector</strong> and paste this URL:</p>
+    <pre><code>${esc(mcpUrl)}</code></pre>
+  </div>
+  <div class="step">
+    <h3>2. Or add it in Claude Code</h3>
+    <pre><code>claude mcp add --transport http gsc ${esc(mcpUrl)}</code></pre>
+  </div>
+  <div class="step">
+    <h3>3. Sign in with Google</h3>
+    <p>A browser tab opens the first time you use it. You sign in with your own
+       Google account, and Google&rsquo;s own Search Console permissions decide what
+       you can see — this service cannot show you a property Google would not
+       show you, and it never gains write access.</p>
+  </div>`
+    : `<div class="step">
+    <h3>This instance is not open for sign-ups</h3>
+    <p>It is configured for a single operator with a shared token rather than
+       per-user Google sign-in. If you reached this page looking for the
+       software itself, the repository explains how to run your own copy.</p>
+  </div>`;
 
-  return shell("Google Search Console MCP", `
-  <h1>Google Search Console for Claude</h1>
-  <p class="lede">A Model Context Protocol server that answers questions about your
-     Search Console data — across every property in your account — instead of
-     handing back raw API rows.</p>
+  const body = `
+<section class="hero">
+  <div class="hero-bg" aria-hidden="true"><div class="hero-grid"></div><div class="hero-glow"></div></div>
+  <div class="wrap hero-inner">
+    <span class="kicker">Model Context Protocol server</span>
+    <h1>Google Search Console MCP</h1>
+    <p class="lede">Connect Search Console to Claude and ask what your data
+       <em>means</em> — across every property in your account, in plain English,
+       without exporting a single CSV.</p>
+    <ul class="pill-row">
+      <li>33 tools</li>
+      <li>Read-only access</li>
+      <li>Every property, one connection</li>
+      <li>Open source</li>
+    </ul>
+  </div>
+</section>
 
-  <h2>What it does</h2>
-  <p>Once connected, you can ask your Claude client things like <em>"what keywords
-     am I almost ranking for?"</em>, <em>"which pages lost the most traffic last
-     month, and why?"</em>, or <em>"do I have pages cannibalising each other?"</em>
-     Thirty-three analysis tools cover quick wins, traffic-drop diagnosis,
-     content decay, cannibalisation, CTR benchmarking, multi-property
-     dashboards and a full image-search suite.</p>
-  <p>Every property-scoped tool takes the property as a parameter, so one
-     connection covers your whole account rather than a single site.</p>
+<div class="wrap page-body">
+  <h2>What you can ask</h2>
+  <p>Once connected, you ask your Claude client questions instead of reading raw
+     API rows:</p>
+  <div class="grid grid-2">
+    <div class="card">
+      <h3>&ldquo;What am I almost ranking for?&rdquo;</h3>
+      <p class="note">Queries sitting just off page one, where a small change
+         moves the most traffic.</p>
+    </div>
+    <div class="card">
+      <h3>&ldquo;Which pages lost traffic, and why?&rdquo;</h3>
+      <p class="note">Traffic-drop diagnosis that separates a ranking loss from
+         lost impressions or a seasonal dip.</p>
+    </div>
+    <div class="card">
+      <h3>&ldquo;Am I cannibalising myself?&rdquo;</h3>
+      <p class="note">Pages competing for the same query, and which one Google
+         actually prefers.</p>
+    </div>
+    <div class="card">
+      <h3>&ldquo;What&rsquo;s decaying?&rdquo;</h3>
+      <p class="note">Content sliding month over month while you weren&rsquo;t
+         looking.</p>
+    </div>
+  </div>
+  <p>Thirty-three tools cover quick wins, traffic-drop diagnosis, content decay
+     and gaps, cannibalisation, CTR benchmarking, topic clusters, multi-property
+     dashboards, URL inspection and a full image-search suite. Every
+     property-scoped tool takes the property as a parameter, so one connection
+     covers your whole account rather than a single site.</p>
 
+  <h2>Connecting</h2>
   ${connect}
 
   <h2>What it reads, and what it stores</h2>
   <ul>
-    <li>It requests exactly one Google permission: <code>webmasters.readonly</code>
-        — read-only access to Search Console. It cannot change your site,
-        submit URLs, or touch anything else in your Google account.</li>
+    <li>It requests exactly one Google permission:
+        <code>webmasters.readonly</code> — read-only access to Search Console.
+        It cannot change your site, submit URLs, or touch anything else in your
+        Google account.</li>
     <li>It stores your email address, your Google account identifier, and an
         encrypted Google refresh token, so it can answer your requests without
         asking you to sign in every time.</li>
-    <li>It does not store your Search Console data. Results are fetched live
-        for each question and passed straight back to your Claude client.</li>
+    <li>It does not store your Search Console data. Results are fetched live for
+        each question and passed straight back to your Claude client.</li>
   </ul>
-  <p>Ask your Claude client to <code>export_my_data</code> to see everything held
-     about you, or <code>disconnect_account</code> to erase it. The full detail is
-     in the <a href="/privacy">privacy policy</a>.</p>
+  <p>Ask your Claude client to run <code>export_my_data</code> to see everything
+     held about you, or <code>disconnect_account</code> to erase it. The full
+     detail is in the <a href="/privacy">privacy policy</a>.</p>
+</div>`;
 
-  ${repo}
-  ${contact}
-  <p class="meta">Not affiliated with or endorsed by Google. "Google" and
-     "Google Search Console" are trademarks of Google LLC.</p>
-`);
+  return shell({
+    title: "Google Search Console MCP server for Claude",
+    description:
+      "A Google Search Console MCP server for Claude. Ask about quick wins, " +
+      "traffic drops, cannibalisation and content decay across every property " +
+      "in your account — read-only, open source.",
+    body,
+    repoUrl: info.repoUrl,
+    stars: info.stars,
+    contactEmail: info.contactEmail,
+  });
 }
 
 export function privacyPage(info: SiteInfo): string {
@@ -138,12 +165,19 @@ export function privacyPage(info: SiteInfo): string {
     : `<p>This instance has not published a contact address. If you did not set this
         service up yourself, ask whoever gave you the link how to reach its operator.</p>`;
 
-  return shell("Privacy policy", `
-  <h1>Privacy policy</h1>
-  <p class="lede">This page describes what <code>${esc(host)}</code> does with your data
-     when you connect your Google account to it. It is written to match what the
-     software actually does; the source is public, so it can be checked.</p>
+  const body = `
+<section class="hero">
+  <div class="hero-bg" aria-hidden="true"><div class="hero-grid"></div></div>
+  <div class="wrap hero-inner">
+    <span class="kicker">Legal</span>
+    <h1>Privacy policy</h1>
+    <p class="lede">What <code>${esc(host)}</code> does with your data when you
+       connect your Google account to it. It is written to match what the
+       software actually does; the source is public, so it can be checked.</p>
+  </div>
+</section>
 
+<div class="wrap page-body">
   <h2>Who runs this service</h2>
   <p>An instance of the open-source <em>gsc-mcp-remote</em> server, operated by
      whoever deployed it at <code>${esc(host)}</code>. It is not operated by,
@@ -220,6 +254,14 @@ export function privacyPage(info: SiteInfo): string {
 
   <h2>Contact</h2>
   ${contact}
-  <p class="meta"><a href="/">Back to the service description</a></p>
-`);
+</div>`;
+
+  return shell({
+    title: "Privacy policy",
+    description: `What ${host} collects when you connect your Google account, and how to erase it.`,
+    body,
+    repoUrl: info.repoUrl,
+    stars: info.stars,
+    contactEmail: info.contactEmail,
+  });
 }

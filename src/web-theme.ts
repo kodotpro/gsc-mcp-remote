@@ -1,0 +1,356 @@
+/**
+ * The visual language for this deployment's public pages, ported from k-o.pro.
+ *
+ * Everything here is constrained by the Content-Security-Policy in http.ts:
+ * `default-src 'none'` with `style-src 'unsafe-inline'` and `font-src 'self'`.
+ * That rules out external stylesheets, any JavaScript, and <img> — so the
+ * design leans on what survives those limits: inline CSS, self-hosted fonts,
+ * inline SVG, and `prefers-color-scheme` instead of a scripted theme toggle.
+ *
+ * Tokens are copied from k-o.pro's globals.css rather than approximated, so
+ * the two sites stay recognisably the same product. Where the original relies
+ * on machinery that cannot come along — Tailwind, the `[data-theme]` attribute
+ * a script sets, the SVG lens filter behind `.glass` — this uses the fallback
+ * that design system already sanctions (see the notes at each site).
+ */
+
+/** Public paths of the self-hosted fonts, served by http.ts from dist/fonts. */
+export const FONT_ROUTES = {
+  "manrope-latin.woff2": "font/woff2",
+  "instrument-serif-latin.woff2": "font/woff2",
+} as const;
+
+export type FontFile = keyof typeof FONT_ROUTES;
+
+/**
+ * Latin subsets only, lifted from k-o.pro's Next build. Manrope is the variable
+ * body face (200-800), Instrument Serif the display face used for headings.
+ *
+ * The `*-fallback` faces are not decoration: they re-declare the metric
+ * overrides Next generates so the system font substituted during `swap` occupies
+ * the same space as the real one, which keeps the heading from reflowing when
+ * the webfont lands. Geist Mono is deliberately not shipped — it is the least
+ * brand-carrying of the three and system monospace costs nothing.
+ */
+const FONT_FACES = `
+@font-face{font-family:Manrope;font-style:normal;font-weight:200 800;font-display:swap;
+ src:url(/fonts/manrope-latin.woff2) format("woff2");
+ unicode-range:U+0000-00FF,U+0131,U+0152-0153,U+02BB-02BC,U+02C6,U+02DA,U+02DC,U+0304,U+0308,U+0329,U+2000-206F,U+20AC,U+2122,U+2191,U+2193,U+2212,U+2215,U+FEFF,U+FFFD}
+@font-face{font-family:"Manrope Fallback";src:local(Arial);
+ ascent-override:103.31%;descent-override:29.07%;line-gap-override:0%;size-adjust:103.19%}
+@font-face{font-family:"Instrument Serif";font-style:normal;font-weight:400;font-display:swap;
+ src:url(/fonts/instrument-serif-latin.woff2) format("woff2");
+ unicode-range:U+0000-00FF,U+0131,U+0152-0153,U+02BB-02BC,U+02C6,U+02DA,U+02DC,U+0304,U+0308,U+0329,U+2000-206F,U+20AC,U+2122,U+2191,U+2193,U+2212,U+2215,U+FEFF,U+FFFD}
+@font-face{font-family:"Instrument Serif Fallback";src:local("Times New Roman");
+ ascent-override:117.94%;descent-override:36.93%;line-gap-override:0%;size-adjust:83.94%}
+`;
+
+/**
+ * k-o.pro's palette. The site switches on a `[data-theme]` attribute written by
+ * a script; with no JavaScript available here the same values hang off
+ * `prefers-color-scheme` instead, which costs the manual toggle and nothing else.
+ */
+const TOKENS = `
+:root{
+ --background:oklch(100% 0 0deg); --foreground:oklch(14.5% 0 0deg);
+ --card:oklch(96.5% 0.005 265deg); --muted-foreground:oklch(55.6% 0 0deg);
+ --border:oklch(92.2% 0 0deg);
+ --brand:oklch(48% 0.17 255deg); --brand-surface:oklch(97.5% 0.01 255deg);
+ --brand-mid:oklch(86% 0.05 255deg);
+ --footer:oklch(20% 0.04 255deg); --footer-foreground:oklch(100% 0 0deg);
+ --radius:1.125rem;
+ --grid-line:oklch(0% 0 0deg / 0.045);
+ --glass-tint:45%; --glass-hi:48%; --glass-hi2:22%; --glass-hi3:10%;
+ --font-sans:Manrope,"Manrope Fallback",system-ui,-apple-system,"Segoe UI",sans-serif;
+ --font-display:"Instrument Serif","Instrument Serif Fallback",Georgia,serif;
+ --font-mono:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
+ color-scheme:light;
+}
+@media (prefers-color-scheme:dark){
+ :root{
+  --background:oklch(14.5% 0 0deg); --foreground:oklch(98.5% 0 0deg);
+  --card:oklch(17% 0 0deg); --muted-foreground:oklch(70.8% 0 0deg);
+  --border:oklch(26.9% 0 0deg);
+  --brand:oklch(62% 0.16 255deg); --brand-surface:oklch(19% 0.02 255deg);
+  --brand-mid:oklch(35% 0.1 255deg);
+  --grid-line:oklch(100% 0 0deg / 0.055);
+  --glass-tint:42%; --glass-hi:24%; --glass-hi2:12%; --glass-hi3:20%;
+  color-scheme:dark;
+ }
+}
+`;
+
+/**
+ * The liquid-glass material, minus the lens.
+ *
+ * k-o.pro upgrades `.glass` to a `feDisplacementMap` refraction behind an
+ * `@supports` gate, with plain blur+saturate as the declared fallback. The
+ * filter needs `feImage` to load a displacement map, which `default-src 'none'`
+ * forbids — so this uses that sanctioned fallback rather than weakening the
+ * policy for an effect that is nearly invisible at header-pill size.
+ */
+const GLASS = `
+.glass{
+ -webkit-backdrop-filter:blur(24px) saturate(180%);
+ backdrop-filter:blur(24px) saturate(180%);
+ background:color-mix(in oklch,var(--card) var(--glass-tint),transparent);
+ border-top:1px solid color-mix(in oklch,white var(--glass-hi),transparent);
+ border-right:1px solid color-mix(in oklch,white var(--glass-hi2),transparent);
+ border-bottom:1px solid color-mix(in oklch,white var(--glass-hi3),transparent);
+ border-left:1px solid color-mix(in oklch,white var(--glass-hi2),transparent);
+ box-shadow:
+  inset 0 1px 0 color-mix(in oklch,white 65%,transparent),
+  inset 0 0 0 1px color-mix(in oklch,white 8%,transparent),
+  inset 0 -1px 1px color-mix(in oklch,black 6%,transparent),
+  0 1px 2px color-mix(in oklch,black 4%,transparent),
+  0 12px 32px -8px color-mix(in oklch,black 12%,transparent);
+}
+@media (prefers-color-scheme:dark){
+ .glass{
+  border-bottom:1px solid color-mix(in oklch,black var(--glass-hi3),transparent);
+  box-shadow:
+   inset 0 1px 0 color-mix(in oklch,white 16%,transparent),
+   inset 0 0 0 1px color-mix(in oklch,white 5%,transparent),
+   inset 0 -1px 1px color-mix(in oklch,black 25%,transparent),
+   0 1px 2px color-mix(in oklch,black 30%,transparent),
+   0 16px 40px -10px color-mix(in oklch,black 55%,transparent);
+ }
+}
+/* Real Liquid Glass turns opaque when the system asks for less transparency.
+   Match that rather than leaving translucent text half-legible for the people
+   who explicitly opted out. */
+@media (prefers-reduced-transparency:reduce){
+ .glass{-webkit-backdrop-filter:none;backdrop-filter:none;background:var(--card)}
+}
+`;
+
+/** Hero backdrop: k-o.pro's masked 40px grid under a slow brand-coloured glow. */
+const HERO = `
+.hero{position:relative;isolation:isolate;
+ border-bottom:1px solid var(--border)}
+.hero-inner{padding:3rem 1rem 3.25rem}
+@media (width >= 48rem){.hero-inner{padding:4.5rem 2rem 4.5rem}}
+/* The hero's own bottom padding is the spacing; a trailing element's margin
+   would stack on top of it. */
+.hero-inner > :last-child{margin-bottom:0}
+.page-body{padding-block:2.75rem 1rem}
+.page-body > h2:first-child{margin-top:0}
+/* Reaches above the hero's own box so the grid and glow run unbroken behind
+   the header, which sits in front of it on z-index. Two things depend on that:
+   the hero has no visible seam where it meets the top of the page, and the
+   glass pill has something to refract at rest instead of flat background.
+   The overflow lives here rather than on .hero so the glow is clipped to this
+   extended box — clipping it at the hero's edge is what drew the seam. */
+.hero-bg{position:absolute;left:0;right:0;bottom:0;top:-8rem;
+ overflow:hidden;z-index:-1;pointer-events:none}
+.hero-grid{position:absolute;inset:0;
+ background-image:linear-gradient(var(--grid-line) 1px,transparent 1px),
+                  linear-gradient(90deg,var(--grid-line) 1px,transparent 1px);
+ background-size:40px 40px;
+ -webkit-mask-image:linear-gradient(to bottom,black 0%,transparent 78%);
+ mask-image:linear-gradient(to bottom,black 0%,transparent 78%)}
+.hero-glow{position:absolute;left:50%;top:-30%;width:46rem;height:46rem;margin-left:-23rem;
+ background:radial-gradient(circle,oklch(60% 0.16 255deg),transparent 65%);
+ opacity:.07;animation:glow-drift 14s ease-in-out infinite;will-change:transform}
+@media (prefers-color-scheme:dark){.hero-glow{opacity:.12}}
+@keyframes glow-drift{
+ 0%,100%{transform:translate(0,0) scale(1)}
+ 38%{transform:translate(-22px,18px) scale(1.07)}
+ 72%{transform:translate(14px,-12px) scale(.96)}
+}
+@media (prefers-reduced-motion:reduce){.hero-glow{animation:none}}
+`;
+
+const BASE = `
+*{box-sizing:border-box}
+html{-webkit-text-size-adjust:100%}
+body{margin:0;background:var(--background);color:var(--foreground);
+ font-family:var(--font-sans);font-size:1rem;line-height:1.65;
+ font-synthesis-weight:none;-webkit-font-smoothing:antialiased;
+ display:flex;flex-direction:column;min-height:100vh}
+.wrap{width:100%;max-width:46rem;margin-inline:auto;padding-inline:1rem}
+@media (width >= 48rem){.wrap{padding-inline:2rem}}
+main{flex:1}
+h1,h2,h3{line-height:1.15;margin:0;text-wrap:balance}
+h1{font-family:var(--font-display);font-weight:400;letter-spacing:-.01em;
+ font-size:clamp(2.5rem,7vw,3.75rem)}
+h2{font-family:var(--font-display);font-weight:400;letter-spacing:-.01em;
+ font-size:clamp(1.6rem,3.4vw,2rem);margin:3rem 0 .85rem}
+h3{font-size:1.02rem;font-weight:700;margin:1.75rem 0 .4rem}
+p,li{margin:0 0 .95rem;text-wrap:pretty}
+ul{padding-left:1.15rem;margin:0 0 .95rem}
+li{margin-bottom:.5rem}
+a{color:inherit;text-underline-offset:.18em;
+ text-decoration-color:color-mix(in oklch,currentColor 40%,transparent)}
+a:hover{text-decoration-color:currentColor}
+strong{font-weight:700}
+code{font-family:var(--font-mono);font-size:.875em;
+ background:color-mix(in oklch,var(--foreground) 7%,transparent);
+ padding:.14em .4em;border-radius:6px}
+pre{font-family:var(--font-mono);font-size:.85rem;line-height:1.5;
+ background:var(--card);border:1px solid var(--border);
+ border-radius:calc(var(--radius) - 6px);
+ padding:.9rem 1.1rem;overflow-x:auto;margin:0 0 1rem}
+pre code{background:none;padding:0;font-size:1em}
+table{border-collapse:collapse;width:100%;font-size:.94rem;margin:0 0 1rem}
+th,td{text-align:left;padding:.55rem .7rem;border-bottom:1px solid var(--border);
+ vertical-align:top}
+th{font-weight:700;color:var(--muted-foreground);font-size:.82rem;
+ text-transform:uppercase;letter-spacing:.04em}
+.lede{font-size:1.15rem;line-height:1.55;color:var(--muted-foreground);
+ max-width:34rem;margin-bottom:1.75rem}
+.kicker{display:inline-block;font-size:.75rem;font-weight:700;letter-spacing:.09em;
+ text-transform:uppercase;color:var(--brand);margin-bottom:1rem}
+.note{font-size:.88rem;color:var(--muted-foreground)}
+:focus-visible{outline:2px solid var(--brand);outline-offset:3px;border-radius:4px}
+`;
+
+const HEADER_FOOTER = `
+.site-head{position:sticky;top:0;z-index:50;width:100%;padding-top:.75rem}
+@media (width >= 48rem){.site-head{padding-top:1rem}}
+.head-pill{display:flex;align-items:center;justify-content:space-between;gap:.75rem;
+ border-radius:9999px;padding:.55rem .75rem .55rem 1.25rem}
+.head-mark{font-weight:800;font-size:.95rem;letter-spacing:-.01em;
+ text-decoration:none;white-space:nowrap}
+.head-mark span{color:var(--muted-foreground);font-weight:600}
+/* The repo link: mark, then the star count as a bordered counter, echoing
+   GitHub's own button so the number reads as "stars" without a label. */
+.gh{display:inline-flex;align-items:center;gap:.5rem;text-decoration:none;
+ font-size:.85rem;font-weight:700;white-space:nowrap;
+ border:1px solid var(--border);border-radius:9999px;
+ padding:.35rem .5rem .35rem .7rem;
+ background:color-mix(in oklch,var(--background) 55%,transparent)}
+.gh:hover{border-color:color-mix(in oklch,var(--brand) 45%,var(--border))}
+.gh svg{width:1.05rem;height:1.05rem;flex:none}
+.gh-stars{display:inline-flex;align-items:center;gap:.2rem;
+ border-left:1px solid var(--border);padding-left:.5rem;
+ color:var(--muted-foreground);font-variant-numeric:tabular-nums}
+.gh-label{display:none}
+@media (width >= 30rem){.gh-label{display:inline}}
+.site-foot{margin-top:4rem;background:var(--footer);color:var(--footer-foreground)}
+.site-foot .wrap{padding-block:2.25rem}
+.site-foot a{color:inherit}
+.foot-links{display:flex;flex-wrap:wrap;gap:.4rem 1.25rem;
+ font-size:.9rem;font-weight:600;margin-bottom:1rem;padding:0;list-style:none}
+.foot-links li{margin:0}
+.site-foot .note{color:color-mix(in oklch,var(--footer-foreground) 62%,transparent);
+ margin:0}
+`;
+
+const COMPONENTS = `
+.card{background:var(--brand-surface);border:1px solid var(--border);
+ border-radius:var(--radius);padding:1.25rem 1.4rem;margin:0 0 1rem}
+.card h3{margin-top:0}
+.card p:last-child,.card ul:last-child{margin-bottom:0}
+.grid{display:grid;gap:.75rem;margin:0 0 1rem}
+@media (width >= 40rem){.grid-2{grid-template-columns:1fr 1fr}}
+.pill-row{display:flex;flex-wrap:wrap;gap:.5rem;margin:0 0 1.5rem;padding:0;list-style:none}
+.pill-row li{margin:0;font-size:.78rem;font-weight:600;
+ display:inline-flex;align-items:center;gap:.45rem;
+ background:color-mix(in oklch,var(--card) 70%,transparent);
+ border:1px solid var(--border);border-radius:9999px;padding:.25rem .75rem;
+ color:var(--muted-foreground)}
+.pill-row li::before{content:"";width:.375rem;height:.375rem;border-radius:9999px;
+ background:color-mix(in oklch,var(--brand) 60%,transparent);flex:none}
+.step{border-left:2px solid var(--brand-mid);padding-left:1.1rem;margin-bottom:1.5rem}
+.step h3{margin-top:0}
+.step p:last-child,.step pre:last-child{margin-bottom:0}
+`;
+
+/** The GitHub mark, inline because `default-src 'none'` forbids <img>. */
+export const GITHUB_MARK =
+  `<svg viewBox="0 0 16 16" aria-hidden="true" fill="currentColor">` +
+  `<path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27s1.36.09 2 .27c1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.01 8.01 0 0 0 16 8c0-4.42-3.58-8-8-8Z"/>` +
+  `</svg>`;
+
+const STAR_MARK =
+  `<svg viewBox="0 0 16 16" aria-hidden="true" fill="currentColor" ` +
+  `style="width:.85rem;height:.85rem">` +
+  `<path d="M8 .25a.75.75 0 0 1 .673.418l1.882 3.815 4.21.612a.75.75 0 0 1 .416 1.279l-3.046 2.97.719 4.192a.75.75 0 0 1-1.088.791L8 12.347l-3.766 1.98a.75.75 0 0 1-1.088-.79l.72-4.194L.818 6.374a.75.75 0 0 1 .416-1.28l4.21-.611L7.327.668A.75.75 0 0 1 8 .25Z"/>` +
+  `</svg>`;
+
+export const THEME_CSS = FONT_FACES + TOKENS + BASE + GLASS + HERO + HEADER_FOOTER + COMPONENTS;
+
+/** Shared by every page here, so the two cannot drift apart. */
+export const esc = (v: string): string =>
+  v.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;")
+   .replace(/"/g, "&quot;").replace(/'/g, "&#39;");
+
+/**
+ * Star counts are rendered the way GitHub renders them — 1200 as "1.2k" — so
+ * the pill stays the same width as the number grows.
+ */
+export function formatStars(count: number): string {
+  if (!Number.isFinite(count) || count < 0) return "";
+  if (count < 1000) return String(Math.round(count));
+  const thousands = count / 1000;
+  return `${thousands < 10 ? thousands.toFixed(1).replace(/\.0$/, "") : Math.round(thousands)}k`;
+}
+
+/**
+ * The repo link for the header. `stars` omitted — or unavailable because
+ * GitHub could not be reached — renders the link with no counter rather than a
+ * zero, which would read as a real and unflattering number.
+ */
+export function repoLink(repoUrl: string, stars?: number): string {
+  const slug = repoUrl.replace(/^https?:\/\/(www\.)?github\.com\//i, "").replace(/\/+$/, "");
+  const label = slug && slug !== repoUrl ? slug : "GitHub";
+  const formatted = typeof stars === "number" ? formatStars(stars) : "";
+  const counter = formatted
+    ? `<span class="gh-stars">${STAR_MARK}${esc(formatted)}</span>`
+    : "";
+  const aria = formatted
+    ? `${label} on GitHub, ${stars} ${stars === 1 ? "star" : "stars"}`
+    : `${label} on GitHub`;
+  return `<a class="gh" href="${esc(repoUrl)}" rel="noopener" aria-label="${esc(aria)}">` +
+    `${GITHUB_MARK}<span class="gh-label">${esc(label)}</span>${counter}</a>`;
+}
+
+export interface ShellOptions {
+  title: string;
+  description?: string;
+  /** Rendered inside <main>. */
+  body: string;
+  repoUrl?: string;
+  stars?: number;
+  contactEmail?: string;
+  /** Keeps the OAuth-facing pages out of the index. */
+  noindex?: boolean;
+}
+
+export function shell(o: ShellOptions): string {
+  const head = [
+    `<meta charset="utf-8">`,
+    `<meta name="viewport" content="width=device-width,initial-scale=1">`,
+    `<title>${esc(o.title)}</title>`,
+    o.description ? `<meta name="description" content="${esc(o.description)}">` : "",
+    o.noindex ? `<meta name="robots" content="noindex">` : "",
+    `<style>${THEME_CSS}</style>`,
+  ].filter(Boolean).join("");
+
+  const nav = o.repoUrl ? repoLink(o.repoUrl, o.stars) : "";
+  const contact = o.contactEmail
+    ? `<li><a href="mailto:${esc(o.contactEmail)}">${esc(o.contactEmail)}</a></li>`
+    : "";
+  const repoFoot = o.repoUrl
+    ? `<li><a href="${esc(o.repoUrl)}" rel="noopener">Source on GitHub</a></li>`
+    : "";
+
+  return `<!doctype html><html lang="en"><head>${head}</head><body>
+<header class="site-head"><div class="wrap"><div class="head-pill glass">
+<a class="head-mark" href="/">gsc<span>.k-o.pro</span></a>
+${nav}
+</div></div></header>
+<main>${o.body}</main>
+<footer class="site-foot"><div class="wrap">
+<ul class="foot-links">
+<li><a href="/">Overview</a></li>
+<li><a href="/privacy">Privacy</a></li>
+${repoFoot}${contact}
+<li><a href="https://k-o.pro" rel="noopener">k-o.pro</a></li>
+</ul>
+<p class="note">Not affiliated with or endorsed by Google or Anthropic.
+&ldquo;Google&rdquo; and &ldquo;Google Search Console&rdquo; are trademarks of Google LLC.</p>
+</div></footer>
+</body></html>`;
+}

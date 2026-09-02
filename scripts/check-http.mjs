@@ -19,10 +19,13 @@
  *  - Rate limiting answers 429 with Retry-After.
  *  - The idle sweeper actually reclaims sessions.
  *  - / and /privacy render, and the anti-framing headers are present.
+ *  - Every self-hosted font the pages reference is actually served, which is
+ *    what catches a build or Dockerfile that stops copying them into dist/.
  *
  * Run: node scripts/check-http.mjs
  */
 import { spawn } from "node:child_process";
+import { formatStars, repoLink } from "../dist/web-theme.js";
 
 const TOKEN = "smoke-test-token-not-a-secret-0123456789";
 const PORT = 20000 + Math.floor(Math.random() * 9000);
@@ -191,6 +194,46 @@ try {
   check("the policy names the deletion control that exists", privacyBody.includes("disconnect_account"));
   check("the policy states data is not used for AI training", /train any machine-learning/i.test(privacyBody));
   check("the policy renders the configured contact address", privacyBody.includes(CONTACT));
+
+  // -- the self-hosted web fonts ---------------------------------------------
+  // Asserted against what the page actually asks for rather than a hardcoded
+  // list: `npm run build` copies these out of src/ as a separate step, and the
+  // Dockerfile ships only dist/, so a font that stops being copied would load
+  // fine from the repo in dev and 404 in production. Every url(/fonts/...) in
+  // the rendered CSS must resolve, or the pages silently fall back to system
+  // fonts everywhere they are actually deployed.
+  const fontUrls = [...new Set([...rootBody.matchAll(/url\((\/fonts\/[^)]+)\)/g)].map((m) => m[1]))];
+  check("the landing page references self-hosted fonts", fontUrls.length > 0, "no url(/fonts/...) in the CSS");
+  for (const url of fontUrls) {
+    const res = await fetch(`${BASE}${url}`);
+    check(
+      `${url} is served`,
+      res.ok && (res.headers.get("content-type") ?? "").startsWith("font/"),
+      `got ${res.status} ${res.headers.get("content-type")}`
+    );
+  }
+  // The fonts are same-origin, so 'self' is what makes them loadable at all.
+  check("CSP permits the self-hosted fonts", /font-src[^;]*'self'/.test(csp), csp);
+  // The filename is matched against an allow-list, never joined onto a path,
+  // so nothing outside dist/fonts is reachable through this route.
+  const strayFont = await fetch(`${BASE}/fonts/not-a-font.woff2`);
+  check("an unknown font name is refused", strayFont.status === 404, `got ${strayFont.status}`);
+
+  // -- the GitHub star counter -----------------------------------------------
+  // The count is polled in the background, so a render can always land before
+  // the first poll returns — or after every poll has failed. That case must
+  // produce a link with no counter, never a "0", which would read as a real
+  // and untrue number.
+  const REPO = "https://github.com/kodotpro/gsc-mcp-remote";
+  const unknown = repoLink(REPO, undefined);
+  check("an unknown star count renders no counter", !unknown.includes("gh-stars"), unknown);
+  check("an unknown star count still renders the link", unknown.includes(REPO));
+  check("a known star count renders the counter", repoLink(REPO, 42).includes("gh-stars"));
+  check(
+    "star counts are abbreviated the way GitHub abbreviates them",
+    formatStars(999) === "999" && formatStars(1200) === "1.2k" && formatStars(12500) === "13k",
+    `${formatStars(999)} / ${formatStars(1200)} / ${formatStars(12500)}`
+  );
 
   // -- capacity limits -------------------------------------------------------
   const openSession = async () => {

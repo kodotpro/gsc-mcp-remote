@@ -44,6 +44,8 @@ import { setRemoteMode } from "./runtime.js";
 import { runWithUserContext, type UserContext } from "./request-context.js";
 import { deniedPage } from "./auth/consent.js";
 import { landingPage, privacyPage, type SiteInfo } from "./web-pages.js";
+import { FONT_ROUTES, type FontFile } from "./web-theme.js";
+import { currentStars, startStarPolling } from "./github-stars.js";
 
 type HttpAuthMode = "bearer" | "oauth";
 
@@ -320,8 +322,14 @@ export async function startHttpServer(): Promise<HttpServer> {
    * The consent interstitial exists to make one fact refusable: which client
    * receives the authorization result. Framing it would defeat that, so it
    * must not be frameable. There is no JavaScript anywhere in these pages, so
-   * the policy can be maximally strict — `default-src 'none'` with inline
-   * styles the only exception, and form submissions confined to this origin.
+   * the policy stays as strict as it can be: `default-src 'none'` denies
+   * scripts, images, frames and network calls alike.
+   *
+   * Two exceptions, both same-origin and neither reaching a third party:
+   * inline styles, because the CSS is embedded in the documents; and
+   * `font-src 'self'` for the two self-hosted web fonts the public pages use.
+   * Loading those from Google Fonts instead would have pulled a third-party
+   * origin into the consent flow, which is exactly what this policy is for.
    * The headers are harmless on the JSON routes.
    */
   app.use((_req: Request, res: Response, next) => {
@@ -336,7 +344,7 @@ export async function startHttpServer(): Promise<HttpServer> {
       // navigation, so 'self' alone silently aborts the submission and the
       // "Continue to Google" button appears to do nothing at all. This is the
       // only cross-origin navigation any form here performs.
-      "default-src 'none'; style-src 'unsafe-inline'; " +
+      "default-src 'none'; style-src 'unsafe-inline'; font-src 'self'; " +
       "form-action 'self' https://accounts.google.com; " +
       "frame-ancestors 'none'; base-uri 'none'"
     );
@@ -356,11 +364,36 @@ export async function startHttpServer(): Promise<HttpServer> {
     perUserSignIn: mode === "oauth",
   };
 
+  // Polled in the background so no page render ever waits on api.github.com.
+  startStarPolling(siteInfo.repoUrl);
+
+  /**
+   * The two self-hosted web fonts. Served from an explicit allow-list rather
+   * than express.static over a directory: the filename never reaches the
+   * filesystem unless it is one of these two, so no request shape can walk out
+   * of dist/fonts. They are content-hashed upstream and never edited in place,
+   * hence the immutable year-long cache.
+   */
+  const fontDir = path.join(__dirname, "fonts");
+  app.get("/fonts/:file", (req: Request, res: Response) => {
+    const file = req.params.file as FontFile;
+    const contentType = Object.prototype.hasOwnProperty.call(FONT_ROUTES, file)
+      ? FONT_ROUTES[file]
+      : undefined;
+    if (!contentType) {
+      res.status(404).type("text/plain").send("Not found");
+      return;
+    }
+    res.type(contentType);
+    res.setHeader("Cache-Control", "public, max-age=31536000, immutable");
+    res.sendFile(path.join(fontDir, file));
+  });
+
   app.get("/", (_req: Request, res: Response) => {
-    res.type("html").send(landingPage(siteInfo));
+    res.type("html").send(landingPage({ ...siteInfo, stars: currentStars() }));
   });
   app.get("/privacy", (_req: Request, res: Response) => {
-    res.type("html").send(privacyPage(siteInfo));
+    res.type("html").send(privacyPage({ ...siteInfo, stars: currentStars() }));
   });
 
   // Unauthenticated liveness probe. Reveals nothing beyond "the process is up".

@@ -320,7 +320,7 @@ npm test
 | Suite | Covers |
 |---|---|
 | `check-tools.mjs` | Every tool registers over stdio; the right ones expose `site_url` |
-| `check-http.mjs` | Health, token enforcement, sessions, the capacity limits and their `Retry-After`, the idle sweeper, the public pages and their anti-framing headers |
+| `check-http.mjs` | Health, token enforcement, sessions, the capacity limits and their `Retry-After`, the idle sweeper, the public pages and their anti-framing headers, and that every self-hosted font the pages reference is actually served from `dist/` |
 | `check-oauth.mjs` | The sandwich, PKCE, single-use codes, refresh rotation and reuse-burning, audience binding, the revocation cascade, DCR, cross-user session rejection, and that `disconnect_account` leaves no row anywhere |
 | `check-hardening.mjs` | SSRF classification across 34 address forms, fetch deadlines and byte caps against a hostile server, redirect re-validation, report-path confinement, image format gating |
 
