@@ -156,7 +156,15 @@ try {
   check("the consent-page origin refuses framing", root.headers.get("x-frame-options") === "DENY", `got ${root.headers.get("x-frame-options")}`);
   const csp = root.headers.get("content-security-policy") ?? "";
   check("CSP blocks scripts and framing", csp.includes("default-src 'none'") && csp.includes("frame-ancestors 'none'"), csp);
-  check("CSP still permits the consent form to post to this origin", csp.includes("form-action 'self'"), csp);
+  // NOT just "form-action 'self'": that assertion passed while the consent
+  // form was completely broken. The form posts to this origin, but that route
+  // answers 302 to accounts.google.com, and browsers apply form-action across
+  // the whole navigation — so 'self' alone silently aborted the submission.
+  check(
+    "CSP permits the consent form to reach Google",
+    /form-action[^;]*'self'/.test(csp) && csp.includes("https://accounts.google.com"),
+    csp
+  );
 
   const privacy = await fetch(`${BASE}/privacy`);
   const privacyBody = await privacy.text();

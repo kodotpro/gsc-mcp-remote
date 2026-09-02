@@ -300,7 +300,14 @@ export async function startHttpServer(): Promise<HttpServer> {
     res.setHeader("Referrer-Policy", "no-referrer");
     res.setHeader(
       "Content-Security-Policy",
-      "default-src 'none'; style-src 'unsafe-inline'; form-action 'self'; " +
+      // form-action must list Google explicitly. The consent form posts to
+      // /oauth/consent on this origin, and that route answers 302 to
+      // accounts.google.com — and browsers apply form-action to the whole
+      // navigation, so 'self' alone silently aborts the submission and the
+      // "Continue to Google" button appears to do nothing at all. This is the
+      // only cross-origin navigation any form here performs.
+      "default-src 'none'; style-src 'unsafe-inline'; " +
+      "form-action 'self' https://accounts.google.com; " +
       "frame-ancestors 'none'; base-uri 'none'"
     );
     // Ignored by browsers over plain http, so it is safe to set unconditionally.

@@ -322,9 +322,40 @@ try {
   );
   check(
     "the consent page can still submit its own form",
-    consentCsp.includes("form-action 'self'"),
+    /form-action[^;]*'self'/.test(consentCsp),
     consentCsp
   );
+
+  // The invariant that actually matters, and the one whose absence shipped a
+  // dead "Continue to Google" button: whatever host the consent POST redirects
+  // to must be permitted by the same page's form-action. Checked against the
+  // real Location header rather than a hardcoded hostname, so it keeps holding
+  // if the Google endpoint ever moves.
+  const pendingId = (authzBody.match(/name="pending_id" value="([^"]+)"/) || [])[1];
+  check("the consent page carries a usable pending id", Boolean(pendingId));
+  if (pendingId) {
+    const submitted = await fetch(`${BASE}/oauth/consent`, {
+      method: "POST",
+      redirect: "manual",
+      headers: { "Content-Type": "application/x-www-form-urlencoded" },
+      body: new URLSearchParams({ pending_id: pendingId, decision: "allow" }).toString(),
+    });
+    check("approving consent redirects onward", submitted.status === 302, `got ${submitted.status}`);
+    const location = submitted.headers.get("location") ?? "";
+    check("consent redirects to Google's sign-in", location.startsWith("https://accounts.google.com/"), location.slice(0, 80));
+
+    let allowed = false;
+    try {
+      const target = new URL(location);
+      const directive = (consentCsp.split(";").find((d) => d.trim().startsWith("form-action")) ?? "");
+      allowed = directive.includes(target.origin);
+    } catch { /* leave false */ }
+    check(
+      "the consent page's form-action allows the host it redirects to",
+      allowed,
+      `form-action does not list ${location.slice(0, 40)}… — the browser will abort the submission silently`
+    );
+  }
   check("the consent page is not cached", (authz.headers.get("cache-control") ?? "").includes("no-store"));
 
   // Now the attacker shape: an off-host https redirect must be flagged.

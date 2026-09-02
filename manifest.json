@@ -2,7 +2,7 @@
   "manifest_version": "0.2",
   "name": "gsc-mcp-remote",
   "display_name": "Google Search Console (multi-property)",
-  "version": "3.4.0",
+  "version": "3.4.1",
   "description": "Ask Claude real questions about your Google Search Console data, across every property in your account. 33 SEO analysis tools.",
   "long_description": "A Google Search Console MCP server that answers SEO questions instead of returning API rows: quick win keywords, traffic drops diagnosed by cause, content decay, keyword cannibalisation, CTR benchmarks, multi-site dashboards, and a full image-search suite with an on-page image audit. Every property-scoped tool takes an optional site_url, and list_properties shows what your account can access, so one install covers all your properties instead of just one. Free and open source, Apache-2.0. Installed this way it runs entirely on your machine; the same server can also be deployed as a remote MCP server with per-user Google sign-in, so a team connects by URL. A fork of Suganthan Mohanadasan's GSC MCP.",
   "author": {
