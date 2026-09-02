@@ -1,7 +1,7 @@
 {
   "name": "gsc-mcp-remote",
   "version": "3.4.0",
-  "description": "Google Search Console MCP server for Claude \u2014 33 SEO analysis tools across every property in your account. Runs locally over stdio or as a remote MCP server with per-user Google sign-in (MCP OAuth, PKCE, DCR), so a team connects by URL and each person sees only their own properties. Quick wins, traffic-drop diagnosis, content decay, cannibalisation, CTR opportunities, multi-site dashboards and a full image-search suite.",
+  "description": "Google Search Console MCP server for Claude \u2014 connect by URL at https://gsc.k-o.pro/mcp and sign in with Google, or run it locally. 33 SEO analysis tools across every property in your account: quick wins, traffic-drop diagnosis, content decay, cannibalisation, CTR opportunities, multi-site dashboards and a full image-search suite. Per-user MCP OAuth (PKCE, DCR) so a team shares one deployment and each person sees only their own properties.",
   "main": "dist/index.js",
   "bin": {
     "gsc-mcp-remote": "dist/index.js"
@@ -10,7 +10,7 @@
     "type": "git",
     "url": "git+https://github.com/kodotpro/gsc-mcp-remote.git"
   },
-  "homepage": "https://github.com/kodotpro/gsc-mcp-remote#readme",
+  "homepage": "https://gsc.k-o.pro",
   "bugs": {
     "url": "https://github.com/kodotpro/gsc-mcp-remote/issues"
   },

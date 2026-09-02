@@ -1,13 +1,17 @@
 # Google Search Console MCP Server
 
-**A Google Search Console MCP server that answers SEO questions instead of returning API rows — across every property in your account, from your own machine or as a remote MCP server your whole team connects to.**
+**A Google Search Console MCP server that answers SEO questions instead of returning API rows — across every property in your account. Connect it to Claude by URL and sign in with Google. Nothing to install.**
 
 [![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
-[![Node](https://img.shields.io/badge/node-%E2%89%A518-brightgreen.svg)](#requirements)
+[![Node](https://img.shields.io/badge/node-%E2%89%A518-brightgreen.svg)](#run-it-on-your-own-machine)
 [![MCP](https://img.shields.io/badge/MCP-Streamable%20HTTP%20%2B%20stdio-orange.svg)](https://modelcontextprotocol.io)
 [![PRs welcome](https://img.shields.io/badge/PRs-welcome-brightgreen.svg)](CONTRIBUTING.md)
 
-Ask Claude *"which pages lost the most traffic last month, and why?"* and get a diagnosis — a ranking loss, a CTR collapse, or a demand decline — not a spreadsheet you still have to read.
+```
+https://gsc.k-o.pro/mcp
+```
+
+Paste that into Claude as a custom connector, sign in with your Google account, and ask *"which pages lost the most traffic last month, and why?"* — you get a diagnosis: a ranking loss, a CTR collapse, or a demand decline. Not a spreadsheet you still have to read.
 
 > **A fork with credit due.** The 29-tool foundation and the analysis logic behind it are [Suganthan Mohanadasan's](https://suganthan.com) work, from [Suganthan's GSC MCP](https://github.com/Suganthan-Mohanadasan/Suganthans-GSC-MCP). This fork adds multi-property access and remote hosting on top. See [Credits](#credits).
 
@@ -17,10 +21,10 @@ Ask Claude *"which pages lost the most traffic last month, and why?"* and get a 
 
 - [Why this one](#why-this-one)
 - [What you can ask](#what-you-can-ask)
-- [Install](#install) — [remote](#option-a--connect-to-a-remote-server-easiest) · [local](#option-b--run-it-locally-stdio) · [self-host](#option-c--host-your-own-remote-server)
+- [**Get connected**](#get-connected)
 - [All 33 tools](#all-33-tools)
-- [Configuration](#configuration)
-- [Security](#security)
+- [Run it on your own machine](#run-it-on-your-own-machine)
+- [Security and privacy](#security-and-privacy)
 - [Troubleshooting](#troubleshooting)
 - [Contributing](#contributing)
 - [Credits](#credits)
@@ -34,7 +38,7 @@ There are several Google Search Console MCP servers, and a growing number of SEO
 
 **It covers your whole account, not one property.** Every property-scoped tool takes a `site_url` argument, and `list_properties` discovers what your credential can actually see. One install answers questions about all your sites — you never edit a config file and restart to look at a different one. (This is what upstream [issue #9](https://github.com/Suganthan-Mohanadasan/Suganthans-GSC-MCP/issues/9) asked for.)
 
-**It runs as a remote MCP server, with per-user Google sign-in.** Most MCP servers are local-only: one process, on one laptop, with one credential. This one also runs as a hosted service over Streamable HTTP. Add it as an MCP connector by URL, sign in with your own Google account, and Google's own Search Console permissions decide what you see. Ten people can share one deployment and each see only their own properties — nobody copies a credential anywhere.
+**It runs as a remote MCP server, with per-user Google sign-in.** Most MCP servers are local-only: one process, on one laptop, with one credential — which is why they cannot be shared, and why the claude.ai and Claude Desktop connector UIs cannot add them at all. This one runs as a hosted service over Streamable HTTP at [gsc.k-o.pro](https://gsc.k-o.pro): add it as an MCP connector by URL, sign in with your own Google account, and Google's own Search Console permissions decide what you see. Ten people share one deployment and each sees only their own properties — nobody copies a credential anywhere.
 
 It is a full [MCP OAuth](https://modelcontextprotocol.io/specification) authorization server: dynamic client registration, PKCE, rotating tokens, and a consent screen of its own. That is what lets the claude.ai and Claude Desktop connector UIs onboard it from nothing but a URL.
 
@@ -64,286 +68,51 @@ Answers carry `_meta` provenance naming the source, the exact parameters, and th
 
 ---
 
-## Install
+## Get connected
 
-Three ways in, depending on whether you want to run anything yourself.
+The server is hosted at **`https://gsc.k-o.pro/mcp`**. There is nothing to download, no API key to generate, and no config file to edit.
 
-| | [A — Remote](#option-a--connect-to-a-remote-server-easiest) | [B — Local](#option-b--run-it-locally-stdio) | [C — Self-hosted remote](#option-c--host-your-own-remote-server) |
-|---|---|---|---|
-| **Setup** | Paste a URL, sign in with Google | Clone, build, add a Google client | Clone onto a server, deploy |
-| **Runs where** | Someone else's server | Your machine | Your server |
-| **Google credentials** | Yours, held server-side encrypted | Yours, on your own disk | Each user's, encrypted |
-| **Good for** | Trying it; teams | Solo use; full control; write tools | Running it for others |
-| **Works with** | claude.ai, Desktop, Claude Code | Any MCP client | claude.ai, Desktop, Claude Code |
+### claude.ai and Claude Desktop
 
-### Requirements
-
-- **Node 18+** for local (stdio) and shared-token remote mode.
-- **Node 24+** for per-user OAuth mode — it stores users in SQLite via `node:sqlite`. The Docker image already is.
-- A Google account with access to at least one Search Console property.
-
----
-
-### Option A — Connect to a remote server (easiest)
-
-If someone has already deployed this and given you a URL, there is nothing to install.
-
-**claude.ai / Claude Desktop:** Settings → Connectors → **Add custom connector** → paste the URL:
+**Settings → Connectors → Add custom connector**, then paste:
 
 ```
-https://gsc.example.com/mcp
+https://gsc.k-o.pro/mcp
 ```
 
-**Claude Code:**
+### Claude Code
 
 ```bash
-claude mcp add --transport http gsc https://gsc.example.com/mcp
+claude mcp add --transport http gsc https://gsc.k-o.pro/mcp
 ```
 
-Either way your browser opens, you approve the connection on the server's consent page, sign in with Google, and you are done. No token to paste, no config file to edit. Then ask: *"list my Search Console properties"*.
+### What happens next
 
-You can revoke access at any time — ask for `disconnect_account`, or remove the app at [myaccount.google.com/permissions](https://myaccount.google.com/permissions).
+Your browser opens and you will see two screens, in this order:
 
----
+1. **This server's own consent page**, naming the application that asked and the exact address the result goes to. Read it — it exists so that a connection request you did not start is refusable. Cancel if anything looks wrong.
+2. **Google's sign-in**, asking for read-only Search Console access and your email address. Nothing else.
 
-### Option B — Run it locally (stdio)
+Then you are connected. Ask:
 
-The server runs on your machine and talks to Claude over stdio. This is the mode that supports the write tools (sitemap submission and the Indexing API).
+> "List my Search Console properties."
 
-**1. Clone and build.** Not published to npm yet, so install from source:
+and go from there. Google's own Search Console permissions decide what you can see — this server cannot show you a property Google would not, and it never gains write access to anything.
 
-```bash
-git clone https://github.com/kodotpro/gsc-mcp-remote.git && cd gsc-mcp-remote
-```
+### While it is in beta
 
-```bash
-npm ci && npm run build
-```
+Google requires an app to be verified before it can offer this kind of sign-in to the general public, and verification takes weeks. Until it completes, Google itself limits sign-in to accounts on an approved list (100 maximum). If sign-in fails with `access_denied`, that is why — [open an issue](https://github.com/kodotpro/gsc-mcp-remote/issues) to ask for access, and you will be added.
 
-**2. Get a Google OAuth client.** In [Google Cloud Console](https://console.cloud.google.com): enable the **Google Search Console API**, then **Credentials → Create credentials → OAuth client ID → Desktop app**, and download the JSON.
+If you would rather not wait, or would rather your Google token never left your own machine, [run it locally](#run-it-on-your-own-machine) — it is the same 33 tools.
 
-**3. Run the guided setup.** It signs you in, verifies the connection with a live API call, and writes your Claude config for you:
+### Leaving
 
-```bash
-node dist/index.js setup
-```
+Two ways, either is enough:
 
-<details>
-<summary><strong>Or configure it by hand</strong></summary>
+- Ask Claude to run **`disconnect_account`**. It erases the stored Google connection, every token, and your saved settings, and ends your sessions immediately.
+- Remove the app at **[myaccount.google.com/permissions](https://myaccount.google.com/permissions)**. The stored credential stops working, and the server erases it the next time it tries to use it.
 
-In Claude Desktop's `claude_desktop_config.json`:
-
-```json
-{
-  "mcpServers": {
-    "gsc": {
-      "command": "node",
-      "args": ["/absolute/path/to/gsc-mcp-remote/dist/index.js"],
-      "env": {
-        "GSC_AUTH_MODE": "oauth",
-        "GSC_OAUTH_SECRETS_FILE": "/absolute/path/to/client_secret.json",
-        "GSC_SCOPES": "readonly",
-        "GSC_SITE_URL": "sc-domain:example.com"
-      }
-    }
-  }
-}
-```
-
-`GSC_SITE_URL` is optional — it only sets a default property for calls that do not name one. On first use a browser opens for Google sign-in; the token is cached in `~/.gsc-mcp/` and refreshed automatically after that.
-
-</details>
-
-<details>
-<summary><strong>Or use a service account</strong></summary>
-
-Add the service account's email as a user on each property in Search Console, then:
-
-```json
-"env": {
-  "GSC_AUTH_MODE": "service_account",
-  "GSC_KEY_FILE": "/absolute/path/to/service-account.json"
-}
-```
-
-</details>
-
-**Access level.** `GSC_SCOPES=readonly` (recommended) requests a single read-only Google permission. `full` adds sitemap submission and the Indexing API; the write tools explain how to upgrade if you call them without it.
-
----
-
-### Option C — Host your own remote server
-
-Run it as a service so other people — or your other machines — can use it without installing anything.
-
-Pick an auth mode first:
-
-| | `GSC_HTTP_AUTH=oauth` — per-user sign-in | `GSC_HTTP_AUTH=bearer` — shared secret (default) |
-|---|---|---|
-| Who connects | Anyone you allow, with **their own Google account** | Whoever holds the one token |
-| What they see | **Their** properties; Google's permissions apply per person | Everything the server's single credential sees |
-| claude.ai / Desktop connector UI | **Yes** — add by URL, OAuth is discovered | No (those UIs have no header field) |
-| Claude Code | Yes, walks the OAuth flow | Yes, with `--header "Authorization: Bearer …"` |
-| Runtime | Node 24+ | Node 18+ |
-
-Bearer is the default so an existing deployment keeps working across an upgrade. OAuth mode is switched on explicitly, and forces the read-only Google scope.
-
-#### Try it locally before deploying
-
-Worth doing — it separates transport problems from deployment problems.
-
-```bash
-openssl rand -hex 32
-```
-
-```bash
-GSC_HTTP_TOKEN=<paste> GSC_AUTH_MODE=oauth GSC_SCOPES=readonly GSC_OAUTH_SECRETS_FILE=/path/to/client_secret.json node dist/index.js http
-```
-
-```bash
-curl -s http://127.0.0.1:8787/healthz
-```
-
-```bash
-claude mcp add --transport http gsc-local http://127.0.0.1:8787/mcp --header "Authorization: Bearer <paste>"
-```
-
-To rehearse the **per-user OAuth flow** with a real Google sign-in before it is public, see [Rehearse the real sign-in locally](#rehearse-the-real-sign-in-locally).
-
-#### Deploy with Docker
-
-Written against a VPS running CloudPanel, the reference deployment; any Docker host with a reverse proxy works the same way, and only the proxy step differs.
-
-**1. DNS.** Point an `A` record at the server. On Cloudflare, set it to **DNS-only (grey cloud)** — the proxy adds buffering and a 100-second hard timeout you do not want in front of a streaming protocol, and it complicates certificate issuance.
-
-**2. Get the code on the box:**
-
-```bash
-git clone https://github.com/kodotpro/gsc-mcp-remote.git /opt/gsc-mcp && cd /opt/gsc-mcp
-```
-
-**3. Configure:**
-
-```bash
-cp .env.example .env && openssl rand -hex 32
-```
-
-Set at minimum `GSC_HTTP_TOKEN` (bearer mode) and `GSC_HTTP_ALLOWED_HOSTS` to your public hostname. The container runs as uid 1000, so give it the volume:
-
-```bash
-mkdir -p data secrets && chown -R 1000:1000 data
-```
-
-**4. Google credentials.** A headless server cannot complete an interactive OAuth flow — that needs a browser on the same machine. In bearer mode, mint the token somewhere with a browser and copy it up:
-
-```bash
-scp ~/.gsc-mcp/oauth-token.json root@YOUR_SERVER:/opt/gsc-mcp/data/.gsc-mcp/oauth-token.json
-```
-
-```bash
-scp /path/to/client_secret.json root@YOUR_SERVER:/opt/gsc-mcp/secrets/client_secret.json
-```
-
-Prefer a `readonly` token for a hosted deployment. A service account is the alternative (`GSC_AUTH_MODE=service_account`, `GSC_KEY_FILE=/secrets/service-account.json`). **In OAuth mode none of this applies** — each user signs in for themselves.
-
-**5. Start it.** The container publishes to loopback only; the reverse proxy is the only thing that reaches it.
-
-```bash
-docker compose up -d --build && curl -s http://127.0.0.1:8787/healthz
-```
-
-**6. Reverse proxy.** In CloudPanel: **Sites → Add Site → Create a Reverse Proxy**, destination `http://127.0.0.1:8787`, then **Manage Site → SSL/TLS → New Let's Encrypt Certificate**. Do **not** install Caddy or another proxy alongside CloudPanel — its nginx already owns ports 80 and 443.
-
-Make sure the proxy does not buffer:
-
-```nginx
-proxy_buffering off;
-proxy_read_timeout 300s;
-proxy_set_header Host $host;
-```
-
-**7. Verify from outside:**
-
-```bash
-curl -s https://gsc.example.com/healthz
-```
-
-#### Turn on per-user Google sign-in
-
-This is what makes the server usable by anyone with a Google account.
-
-1. **OAuth consent screen:** External. While it is in **Testing** status only accounts you list as **test users** can sign in — that is your beta gate (100 users max, and refresh tokens expire weekly until the app is verified).
-2. **Credentials → Create credentials → OAuth client ID → Web application**, with exactly this authorised redirect URI:
-   ```
-   https://gsc.example.com/oauth/google/callback
-   ```
-3. In `.env`: `GSC_HTTP_AUTH=oauth`, `GSC_PUBLIC_URL=https://gsc.example.com`, `GSC_GOOGLE_CLIENT_ID`, `GSC_GOOGLE_CLIENT_SECRET`, and `GSC_CONTACT_EMAIL`.
-4. `docker compose up -d --build`
-
-Optional extra gates: `GSC_ALLOWED_EMAILS`, `GSC_ALLOWED_EMAIL_DOMAINS`.
-
-Going fully public also needs Google's verification for the sensitive Search Console scope. The server already serves the two pages that requires — a home page at `/` and a privacy policy at `/privacy` — and [`docs/verification/`](docs/verification/) has the runbook, scope justifications and demo-video script.
-
-#### Backups
-
-In OAuth mode the SQLite database is small but not reproducible: who has connected, and their encrypted Google refresh tokens. Losing it loses nobody's Search Console data — none is stored — but it signs every user out at once. An opt-in Litestream sidecar replicates it continuously:
-
-```bash
-docker compose --profile backup up -d
-```
-
-To restore, stop the app and move the current database aside first (Litestream refuses to write over an existing file, and `--no-deps` is what stops Compose starting the app and creating an empty one):
-
-```bash
-docker compose stop gsc-mcp
-```
-
-```bash
-mv data/.gsc-mcp/oauth-server.db data/.gsc-mcp/oauth-server.db.old; rm -f data/.gsc-mcp/oauth-server.db-wal data/.gsc-mcp/oauth-server.db-shm
-```
-
-```bash
-docker compose --profile backup run --rm --no-deps --entrypoint litestream litestream restore -config /etc/litestream.yml /data/.gsc-mcp/oauth-server.db
-```
-
-```bash
-docker compose up -d
-```
-
-**The vault key is deliberately not replicated.** Those refresh tokens are encrypted with the key at `data/.gsc-mcp/vault.key`; shipping it to the same bucket as the ciphertext would put the lock and the key in one place. Copy its 64 hex characters into a password manager instead. Keep it and a restore is complete; lose it and the restore still works — the stored Google connections are simply dead, and each user reconnects once.
-
-#### Operating it
-
-```bash
-docker compose logs -f --tail 50
-```
-
-```bash
-git pull && docker compose up -d --build
-```
-
-Logs record session open/close and token refreshes, never tokens or query data. `/healthz` reports liveness, the active session count and the limits actually in force. Sessions idle for 30 minutes close automatically.
-
-Memory is capped at 512 MB with Node's heap at 384 MB, deliberately: Search Analytics results accumulate in memory, and the cap stops this service starving its neighbours. Four limits stop one caller taking the process down, since each session holds its own tool registry (~440 KB):
-
-| Limit | Default | Variable | Applies in |
-|---|---|---|---|
-| Concurrent sessions, server-wide | 120 | `GSC_MAX_SESSIONS` | both modes |
-| Concurrent sessions per user | 8 | `GSC_MAX_SESSIONS_PER_USER` | `oauth` only |
-| Requests per user per minute | 60 | `GSC_RATE_LIMIT_PER_MIN` | both modes |
-| Rows accumulated per query | 100,000 | `GSC_MAX_TOTAL_ROWS` | both modes |
-| Deadline per Google API call | 60 s | `GSC_GOOGLE_TIMEOUT_MS` | both modes |
-
-Exceeding them returns `429`, or `503` at the server-wide ceiling, with `Retry-After` — rather than an OOM. A query that hits the row ceiling says so in its response instead of quietly reporting partial data. The per-user ceiling needs a per-request identity, so it only means anything in `oauth` mode; bearer mode has one tenant and is bounded by `GSC_MAX_SESSIONS` alone.
-
-#### What remote mode changes
-
-Two tools behave differently when the server is not on your own machine:
-
-- **`generate_report`** returns markdown inline instead of writing a file, because a file would land on the server's disk where you could not retrieve it. When it does write, paths are confined to `GSC_REPORT_DIR`.
-- **`image_page_audit`** refuses URLs resolving to private, loopback, link-local or reserved addresses — including the IPv4-mapped IPv6 forms that URL normalisation hides — re-validates the address at connect time so DNS cannot be rebound between check and connect, re-checks every redirect hop, and bounds each fetch with one deadline covering the body plus a byte ceiling.
-
-`submit_url` and `submit_batch` refuse to run in per-user mode rather than quietly acting as the server's own credential.
+`export_my_data` shows everything held about you at any time. Details in [Security and privacy](#security-and-privacy).
 
 ---
 
@@ -430,7 +199,83 @@ Tool descriptions instruct the model to base analysis only on returned data, and
 
 ---
 
+## Run it on your own machine
+
+Everything above works without installing anything. But this is open source, and there are two good reasons to run it yourself: your Google token never leaves your machine, and local mode is the only mode with the **write tools** (sitemap submission and the Indexing API), which the hosted service deliberately does not offer.
+
+Same 33 tools, running over stdio.
+
+**1. Clone and build.** Not published to npm yet, so install from source:
+
+```bash
+git clone https://github.com/kodotpro/gsc-mcp-remote.git && cd gsc-mcp-remote
+```
+
+```bash
+npm ci && npm run build
+```
+
+**2. Get a Google OAuth client.** In [Google Cloud Console](https://console.cloud.google.com): enable the **Google Search Console API**, then **Credentials → Create credentials → OAuth client ID → Desktop app**, and download the JSON.
+
+**3. Run the guided setup.** It signs you in, verifies the connection with a live API call, and writes your Claude config for you:
+
+```bash
+node dist/index.js setup
+```
+
+That is it — restart Claude and ask *"list my Search Console properties"*.
+
+<details>
+<summary><strong>Or configure it by hand</strong></summary>
+
+In Claude Desktop's `claude_desktop_config.json`, or via `claude mcp add` for Claude Code:
+
+```json
+{
+  "mcpServers": {
+    "gsc": {
+      "command": "node",
+      "args": ["/absolute/path/to/gsc-mcp-remote/dist/index.js"],
+      "env": {
+        "GSC_AUTH_MODE": "oauth",
+        "GSC_OAUTH_SECRETS_FILE": "/absolute/path/to/client_secret.json",
+        "GSC_SCOPES": "readonly",
+        "GSC_SITE_URL": "sc-domain:example.com"
+      }
+    }
+  }
+}
+```
+
+`GSC_SITE_URL` is optional — it only sets a default property for calls that do not name one. On first use a browser opens for Google sign-in; the token is cached in `~/.gsc-mcp/` and refreshed automatically after that.
+
+</details>
+
+<details>
+<summary><strong>Or use a service account</strong></summary>
+
+Add the service account's email as a user on each property in Search Console, then:
+
+```json
+"env": {
+  "GSC_AUTH_MODE": "service_account",
+  "GSC_KEY_FILE": "/absolute/path/to/service-account.json"
+}
+```
+
+</details>
+
+**Requirements:** Node 18+. **Access level:** `GSC_SCOPES=readonly` (recommended) requests a single read-only Google permission; `full` adds the write tools.
+
+### Or host it for other people
+
+The same server runs as a remote MCP server with per-user Google sign-in — that is exactly what `gsc.k-o.pro` is. If you would rather your users' tokens sat on your own hardware, [docs/self-hosting.md](docs/self-hosting.md) covers the whole thing: Docker deployment, the reverse proxy, turning on per-user sign-in, Google verification, backups and the capacity limits.
+
+---
+
 ## Configuration
+
+These apply when you [run the server yourself](#run-it-on-your-own-machine). Using the hosted instance needs none of them.
 
 ### Core
 
@@ -444,38 +289,11 @@ Tool descriptions instruct the model to base analysis only on returned data, and
 | `GSC_SITE_URLS` | No | Comma-separated; supplies `multi_site_dashboard`'s default set |
 | `GSC_SCOPES` | No | `readonly` or `full` (default: `full`) |
 
-### Remote mode
-
-| Variable | Required | Description |
-|----------|----------|-------------|
-| `GSC_HTTP_TOKEN` | Bearer mode | Shared token clients must present. Minimum 24 characters; the server refuses to start without it |
-| `GSC_HTTP_ALLOWED_HOSTS` | Behind a proxy | Comma-separated public hostnames allowed in the `Host` header. Missing entries cause `403` |
-| `GSC_HTTP_PORT` | No | Listen port (default `8787`) |
-| `GSC_HTTP_HOST` | No | Bind address (default `127.0.0.1`; the container sets `0.0.0.0`) |
-| `GSC_HTTP_IDLE_TIMEOUT_MS` | No | Close sessions idle longer than this (default 30 minutes) |
-| `GSC_HTTP_SWEEP_INTERVAL_MS` | No | How often idle sessions are reclaimed (default 60 s) |
-
-### Per-user OAuth mode
-
-| Variable | Required | Description |
-|----------|----------|-------------|
-| `GSC_HTTP_AUTH` | To enable | `oauth` (default is `bearer`) |
-| `GSC_PUBLIC_URL` | Yes | Public base URL — the OAuth issuer, token audience, and Google-callback base |
-| `GSC_GOOGLE_CLIENT_ID` / `GSC_GOOGLE_CLIENT_SECRET` | Yes* | Google **Web application** client with `<GSC_PUBLIC_URL>/oauth/google/callback` registered (*or reuse `GSC_OAUTH_SECRETS_FILE`) |
-| `GSC_CONTACT_EMAIL` | For verification | Contact address shown on `/privacy`; Google's reviewers expect one |
-| `GSC_REPO_URL` | No | Source link shown on `/` |
-| `GSC_ALLOWED_EMAILS` / `GSC_ALLOWED_EMAIL_DOMAINS` | No | Extra sign-in allowlist on top of Google's test-user list |
-| `GSC_OAUTH_DB_FILE` | No | SQLite path (default `~/.gsc-mcp/oauth-server.db`) |
-| `GSC_VAULT_KEY_FILE` | No | Vault key path (default `~/.gsc-mcp/vault.key`, auto-created `0600`) |
-| `LITESTREAM_*` | For backups | `BUCKET`, `ENDPOINT`, `ACCESS_KEY_ID`, `SECRET_ACCESS_KEY` for the `backup` profile |
-
-### Limits
-
-See the [table above](#operating-it). Also `GSC_REPORT_DIR` (default cwd) — the only directory `generate_report` may write into.
+The variables a hosted deployment adds — transport, per-user OAuth, capacity limits and backups — are documented in [docs/self-hosting.md](docs/self-hosting.md#environment-variables).
 
 ---
 
-## Security
+## Security and privacy
 
 This server holds other people's Google credentials, so the design is worth stating plainly. Full policy and reporting instructions: [SECURITY.md](SECURITY.md).
 
@@ -493,7 +311,7 @@ This server holds other people's Google credentials, so the design is worth stat
 
 ### Self-checks
 
-Four suites run with no Google credentials, so they are safe anywhere — and they are what CI runs:
+Four suites run with no Google credentials, so they are safe to run anywhere, and CI runs them on every push across Node 18, 20, 22 and 24:
 
 ```bash
 npm test
@@ -508,33 +326,22 @@ npm test
 
 Every check in the hardening suite failed before its fix landed.
 
-### Rehearse the real sign-in locally
-
-The suites above fake Google so they can run in CI. To exercise an **actual** sign-in before deploying, run the flow on your own machine — Google permits `http://localhost` redirects for Web-application clients, so you can add a loopback URI to the same client that serves production:
-
-```bash
-GSC_GOOGLE_CLIENT_ID=... GSC_GOOGLE_CLIENT_SECRET=... npm run try:oauth
-```
-
-It boots OAuth mode on `http://localhost:8787` with a throwaway database and vault key in a temp directory (deleted on exit, so your deployment is untouched), self-checks discovery, PKCE and the `401` challenge, then prints exactly what to do next. Register `http://localhost:8787/oauth/google/callback` on the client, and make sure your account is a listed **test user** — otherwise Google returns `access_denied` before the server's consent page is ever reached.
-
-If the flow works there, the only things that can still differ on a server are TLS, DNS and the reverse proxy.
-
 ---
 
 ## Troubleshooting
 
+Using the hosted instance:
+
 | Symptom | Cause |
 |---|---|
-| `403` from a deployed server | The public hostname is missing from `GSC_HTTP_ALLOWED_HOSTS`. Binding `0.0.0.0` disables the SDK's localhost-only host check, so it must be listed explicitly |
-| `502` from the proxy | The proxy cannot reach the container. Check `docker compose ps` and `docker compose logs` |
-| `525` behind Cloudflare | Cloudflare cannot complete TLS to your origin — usually a missing or lapsed origin certificate for that hostname |
-| `access_denied` at Google | The account is not a listed test user on the consent screen |
-| `GSC_SITE_URL environment variable is required` | A tool was called with no `site_url` and no default is set. Pass one, or set `GSC_SITE_URL` |
-| Connector UI won't accept the URL | Those UIs need OAuth; a shared bearer token has no header field there. Use `GSC_HTTP_AUTH=oauth` |
-| `node:sqlite` error on start | OAuth mode needs Node 24+. Bearer mode and stdio work on 18+ |
-| `429` / `503` with `Retry-After` | A capacity limit. See [Operating it](#operating-it) |
-| Compose refuses to start | `GSC_HTTP_ALLOWED_HOSTS` is unset in `.env` — it is required rather than defaulted |
+| `access_denied` from Google | Your account is not yet on the approved list. See [While it is in beta](#while-it-is-in-beta) |
+| The connector UI rejects the URL | Check it is exactly `https://gsc.k-o.pro/mcp`. Both `/mcp` and `/mcp/` work |
+| "This session belongs to a different user" | A stale connector entry. Remove and re-add it |
+| A tool says a property is not available | Google's own permissions apply. Confirm the account you signed in with has access in Search Console itself |
+| `GSC_SITE_URL environment variable is required` | A tool was called without naming a property and you have no default. Name one, or run `set_default_property` |
+| `429` or `503` with `Retry-After` | A capacity limit; wait the stated interval. See [the limits](docs/self-hosting.md#limits) |
+
+Running it yourself: see [docs/self-hosting.md#troubleshooting](docs/self-hosting.md#troubleshooting).
 
 ---
 
