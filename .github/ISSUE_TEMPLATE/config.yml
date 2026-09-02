@@ -1,0 +1,8 @@
+blank_issues_enabled: true
+contact_links:
+  - name: Security vulnerability
+    url: https://github.com/kodotpro/gsc-mcp-remote/security/advisories
+    about: Report privately, never as a public issue. See SECURITY.md.
+  - name: Upstream project (Suganthan's GSC MCP)
+    url: https://github.com/Suganthan-Mohanadasan/Suganthans-GSC-MCP
+    about: The original project this is forked from — the tool set and analysis logic originate there.

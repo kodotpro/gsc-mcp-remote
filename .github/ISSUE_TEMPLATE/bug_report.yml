@@ -1,0 +1,58 @@
+name: Bug report
+description: Something does not work as documented
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for reporting. **For anything security-related, do not use this form** —
+        use [private vulnerability reporting](https://github.com/kodotpro/gsc-mcp-remote/security/advisories)
+        instead.
+
+        This is a fork, so please report problems with *this* server here rather than upstream.
+  - type: dropdown
+    id: mode
+    attributes:
+      label: How are you running it?
+      options:
+        - Local (stdio)
+        - Remote, shared token (GSC_HTTP_AUTH=bearer)
+        - Remote, per-user sign-in (GSC_HTTP_AUTH=oauth)
+        - Not sure
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: Version or commit
+      description: "`node dist/index.js --version`, or the commit you are on"
+    validations:
+      required: true
+  - type: input
+    id: node
+    attributes:
+      label: Node version
+      description: "`node --version`. OAuth mode needs 24+; other modes 18+"
+    validations:
+      required: true
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened
+      description: What you did, what you expected, and what you got instead. Name the tool if it was one.
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: Relevant output
+      description: Error messages or server logs. **Redact tokens, client secrets and any URL containing a code.**
+      render: shell
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Before submitting
+      options:
+        - label: "`npm test` passes on my clone (or I have said which suite fails)"
+        - label: I have redacted any credentials from the output above
+          required: true

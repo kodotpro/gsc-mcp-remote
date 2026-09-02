@@ -1,7 +1,7 @@
 /**
  * Per-request user context, carried through AsyncLocalStorage.
  *
- * This is what makes 30 tools multi-user without rewriting them: the HTTP
+ * This is what makes 33 tools multi-user without rewriting them: the HTTP
  * layer wraps each request in runWithUserContext(), and the two functions
  * every tool already funnels through — getSearchConsoleClient() and
  * resolveSiteUrl() in auth.ts — consult the store before falling back to the

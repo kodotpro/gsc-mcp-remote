@@ -135,7 +135,7 @@ async function getOAuthClient(): Promise<searchconsole_v1.Searchconsole> {
 
 export async function getSearchConsoleClient(): Promise<searchconsole_v1.Searchconsole> {
   // Multi-user (OAuth HTTP) mode: every request carries its user's own client,
-  // so all 30 tools run as the person asking without any of them changing.
+  // so all 33 tools run as the person asking without any of them changing.
   const ctx = getUserContext();
   if (ctx) return ctx.getSearchConsole();
 

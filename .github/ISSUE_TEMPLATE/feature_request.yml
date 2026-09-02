@@ -1,0 +1,33 @@
+name: Feature or tool request
+description: Suggest a new analysis tool or capability
+labels: ["enhancement"]
+body:
+  - type: textarea
+    id: question
+    attributes:
+      label: What question should it answer?
+      description: |
+        The tools here are organised around SEO questions rather than API endpoints
+        ("which pages lost traffic and why", not "call searchanalytics.query"). What
+        would you want to ask Claude that you cannot ask today?
+    validations:
+      required: true
+  - type: textarea
+    id: data
+    attributes:
+      label: Which Search Console data would it need?
+      description: Dimensions, filters, date ranges, `type=image` — as far as you know.
+  - type: dropdown
+    id: scope
+    attributes:
+      label: Is it property-scoped?
+      description: Nearly everything here takes a `site_url` so it works across an account.
+      options:
+        - "Yes — it should take a site_url"
+        - "No — it is account-wide or property-independent"
+        - Not sure
+  - type: textarea
+    id: notes
+    attributes:
+      label: Anything else
+      description: Existing tools that get close, prior art, or why the workaround is not enough.

@@ -65,7 +65,7 @@ const SWEEP_INTERVAL_MS = Number(process.env.GSC_HTTP_SWEEP_INTERVAL_MS ?? 60 * 
 /**
  * Capacity limits.
  *
- * Each session holds its own McpServer with all 31 tools registered, measured
+ * Each session holds its own McpServer with all 33 tools registered, measured
  * at ~440 KB. Without a ceiling, roughly 900 initialize calls exhaust the
  * container's 384 MB heap and abort the process — so one caller could take
  * every other tenant down. These are the backstops.
