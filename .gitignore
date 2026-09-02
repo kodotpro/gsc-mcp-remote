@@ -1,6 +1,9 @@
 node_modules/
 .env
 
+# macOS finder metadata, created in any directory the Finder opens.
+.DS_Store
+
 # Build output. Upstream commits dist/ so its .mcpb desktop bundle can be
 # packed without a compile step; this fork builds from source instead, which
 # keeps diffs readable. Run `npm run build` before packing a bundle.
