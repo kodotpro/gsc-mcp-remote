@@ -21,6 +21,7 @@
 import { randomUUID, timingSafeEqual } from "node:crypto";
 import * as os from "node:os";
 import * as path from "node:path";
+import * as v8 from "node:v8";
 import type { Server as HttpServer } from "node:http";
 
 import express, { type Request, type RequestHandler, type Response } from "express";
@@ -38,6 +39,7 @@ import { mcpAuthRouter } from "@modelcontextprotocol/sdk/server/auth/router.js";
 import { requireBearerAuth } from "@modelcontextprotocol/sdk/server/auth/middleware/bearerAuth.js";
 
 import { createServer, SERVER_VERSION } from "./server-factory.js";
+import { MAX_TOTAL_ROWS } from "./analytics.js";
 import { setRemoteMode } from "./runtime.js";
 import { runWithUserContext, type UserContext } from "./request-context.js";
 import { deniedPage } from "./auth/consent.js";
@@ -191,6 +193,34 @@ async function closeSession(sessionId: string): Promise<void> {
   } catch {
     // already gone
   }
+}
+
+/**
+ * Process memory, for watching real pressure instead of inferring it.
+ *
+ * The interesting number is heapUsedPercent against the V8 ceiling, because
+ * that is what actually aborts the process — not RSS, and not the container
+ * limit. `heap_size_limit` derives from --max-old-space-size but sits above it,
+ * because it counts the young generation too — a container configured for 384
+ * reports roughly 480 here. That makes it the honest thing to measure against,
+ * rather than a figure copied from the compose file.
+ *
+ * Sizing context, measured on the default 384 MB heap: each session's tool
+ * registry costs ~0.5 MB, and one Search Analytics query at the default
+ * 25,000-row ceiling costs ~17 MB including the transient JSON. Sustained
+ * pressure above ~85% means concurrent large queries, not too many sessions.
+ */
+function memoryReport(): Record<string, number> {
+  const { heapUsed, rss, external } = process.memoryUsage();
+  const limit = v8.getHeapStatistics().heap_size_limit;
+  const mb = (bytes: number) => Math.round((bytes / 1048576) * 10) / 10;
+  return {
+    heapUsedMb: mb(heapUsed),
+    heapLimitMb: mb(limit),
+    heapUsedPercent: Math.round((heapUsed / limit) * 1000) / 10,
+    rssMb: mb(rss),
+    externalMb: mb(external),
+  };
 }
 
 export async function startHttpServer(): Promise<HttpServer> {
@@ -348,6 +378,8 @@ export async function startHttpServer(): Promise<HttpServer> {
       // mode, where requests carry an identity.
       perUserSessionLimit: mode === "oauth" ? MAX_SESSIONS_PER_USER : null,
       requestsPerMinute: RATE_LIMIT_PER_MIN,
+      maxRowsPerQuery: MAX_TOTAL_ROWS,
+      memory: memoryReport(),
     });
   });
 

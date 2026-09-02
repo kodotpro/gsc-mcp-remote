@@ -99,6 +99,22 @@ try {
   check("/healthz responds without auth", health.status === "ok", JSON.stringify(health));
   check("/healthz reports the transport", health.transport === "streamable-http");
 
+  // Memory reporting exists so real pressure can be watched rather than
+  // inferred: the heap ceiling is what aborts the process, and concurrent
+  // large queries are what approach it.
+  const mem = health.memory ?? {};
+  check("/healthz reports heap usage", typeof mem.heapUsedMb === "number" && mem.heapUsedMb > 0, JSON.stringify(mem));
+  check("/healthz reports the heap ceiling", typeof mem.heapLimitMb === "number" && mem.heapLimitMb > mem.heapUsedMb, JSON.stringify(mem));
+  check(
+    "/healthz reports heap pressure as a percentage",
+    typeof mem.heapUsedPercent === "number" && mem.heapUsedPercent > 0 && mem.heapUsedPercent < 100,
+    String(mem.heapUsedPercent)
+  );
+  check("/healthz reports rss", typeof mem.rssMb === "number" && mem.rssMb > 0, String(mem.rssMb));
+  // The row ceiling is the single biggest driver of peak memory, so it is
+  // reported alongside it rather than left to be read out of the config.
+  check("/healthz reports the row ceiling in force", health.maxRowsPerQuery === 25000, String(health.maxRowsPerQuery));
+
   const noToken = await post({ jsonrpc: "2.0", id: 1, method: "initialize", params: {} });
   check("POST /mcp without a token is rejected", noToken.status === 401, `got ${noToken.status}`);
 

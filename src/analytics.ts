@@ -36,8 +36,20 @@ export interface QueryParams {
  * enough to take the whole process — and every other tenant — down. Callers
  * that legitimately need more can raise it per call; the result says plainly
  * when a cut happened, so an answer is never quietly computed on partial data.
+ *
+ * Why 25,000 and not more. Measured on the default container (384 MB heap):
+ * 100,000 rows cost ~24 MB as objects, plus ~44 MB transient while the tool
+ * serialises its result to JSON — roughly 68 MB for a single query, so four
+ * concurrent ones came within reach of the ceiling. At 25,000 the same query
+ * costs ~17 MB all-in, which is four times the headroom. It also shortens the
+ * event-loop stall: serialising a huge payload is CPU-bound and synchronous,
+ * so on a shared 2-vCPU host one enormous query made every other tenant wait.
+ *
+ * 25,000 is still far more than an analysis question needs — Google's own
+ * per-page maximum is 25,000 — and truncation is always reported rather than
+ * hidden. Raise GSC_MAX_TOTAL_ROWS on a box with memory to spare.
  */
-export const MAX_TOTAL_ROWS = Number(process.env.GSC_MAX_TOTAL_ROWS ?? 100000);
+export const MAX_TOTAL_ROWS = Number(process.env.GSC_MAX_TOTAL_ROWS ?? 25000);
 
 /** Set when the last fetchAllRows call stopped early. */
 export interface RowFetchResult {

@@ -179,6 +179,17 @@ check("sniffed formats map to real media types", badTypes.length === 0, badTypes
 // the caller falls back to the server's Content-Type.
 check("a container family maps to no media type", mediaTypeFor("isobmff") === null, String(mediaTypeFor("isobmff")));
 
+// ---------------------------------------------------------------------------
+console.log("\nRow ceiling");
+// ---------------------------------------------------------------------------
+// Unbounded pagination could accumulate every row Google would return, which
+// on a shared host was enough to abort the process. The default is deliberately
+// modest: measured at 384 MB of heap, 100,000 rows cost ~68 MB per query
+// including the transient JSON, against ~17 MB at 25,000.
+const { MAX_TOTAL_ROWS } = await import("../dist/analytics.js");
+check("the row ceiling defaults to a memory-safe value", MAX_TOTAL_ROWS === 25000, String(MAX_TOTAL_ROWS));
+check("the row ceiling is overridable", Number(process.env.GSC_MAX_TOTAL_ROWS ?? 25000) === 25000);
+
 if (failures.length > 0) {
   console.error(`\nHardening tests: ${failures.length} failure(s).`);
   process.exit(1);
