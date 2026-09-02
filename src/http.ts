@@ -44,7 +44,7 @@ import { setRemoteMode } from "./runtime.js";
 import { runWithUserContext, type UserContext } from "./request-context.js";
 import { deniedPage } from "./auth/consent.js";
 import { landingPage, privacyPage, type SiteInfo } from "./web-pages.js";
-import { FONT_ROUTES, type FontFile } from "./web-theme.js";
+import { FONT_ROUTES, IMAGE_ROUTES, canonicalBase } from "./web-theme.js";
 import { currentStars, startStarPolling } from "./github-stars.js";
 
 type HttpAuthMode = "bearer" | "oauth";
@@ -325,11 +325,18 @@ export async function startHttpServer(): Promise<HttpServer> {
    * the policy stays as strict as it can be: `default-src 'none'` denies
    * scripts, images, frames and network calls alike.
    *
-   * Two exceptions, both same-origin and neither reaching a third party:
-   * inline styles, because the CSS is embedded in the documents; and
-   * `font-src 'self'` for the two self-hosted web fonts the public pages use.
-   * Loading those from Google Fonts instead would have pulled a third-party
-   * origin into the consent flow, which is exactly what this policy is for.
+   * Three exceptions, every one same-origin and none reaching a third party:
+   * inline styles, because the CSS is embedded in the documents; `font-src
+   * 'self'` for the two self-hosted web fonts; and `img-src 'self'` for the
+   * wordmark. Serving the fonts from Google Fonts instead would have pulled a
+   * third-party origin into the consent flow, which is exactly what this policy
+   * exists to prevent — so they are hosted here and the policy stays
+   * first-party throughout.
+   *
+   * `script-src` is still absent, so it falls back to `default-src 'none'`: no
+   * JavaScript executes on any of these pages. The JSON-LD the landing page
+   * carries is a data block rather than a script, which browsers never execute
+   * and this policy therefore permits.
    * The headers are harmless on the JSON routes.
    */
   app.use((_req: Request, res: Response, next) => {
@@ -345,7 +352,7 @@ export async function startHttpServer(): Promise<HttpServer> {
       // "Continue to Google" button appears to do nothing at all. This is the
       // only cross-origin navigation any form here performs.
       "default-src 'none'; style-src 'unsafe-inline'; font-src 'self'; " +
-      "form-action 'self' https://accounts.google.com; " +
+      "img-src 'self'; form-action 'self' https://accounts.google.com; " +
       "frame-ancestors 'none'; base-uri 'none'"
     );
     // Ignored by browsers over plain http, so it is safe to set unconditionally.
@@ -368,32 +375,65 @@ export async function startHttpServer(): Promise<HttpServer> {
   startStarPolling(siteInfo.repoUrl);
 
   /**
-   * The two self-hosted web fonts. Served from an explicit allow-list rather
-   * than express.static over a directory: the filename never reaches the
-   * filesystem unless it is one of these two, so no request shape can walk out
-   * of dist/fonts. They are content-hashed upstream and never edited in place,
-   * hence the immutable year-long cache.
+   * The static assets the public pages reference: two web fonts and the
+   * wordmark. Served from an explicit allow-list rather than express.static
+   * over a directory, so the filename never reaches the filesystem unless it is
+   * one of the names below and no request shape can walk out of the asset
+   * directory. None of them is ever edited in place — a change ships under a
+   * new name — hence the immutable year-long cache.
    */
-  const fontDir = path.join(__dirname, "fonts");
-  app.get("/fonts/:file", (req: Request, res: Response) => {
-    const file = req.params.file as FontFile;
-    const contentType = Object.prototype.hasOwnProperty.call(FONT_ROUTES, file)
-      ? FONT_ROUTES[file]
-      : undefined;
-    if (!contentType) {
-      res.status(404).type("text/plain").send("Not found");
-      return;
-    }
-    res.type(contentType);
-    res.setHeader("Cache-Control", "public, max-age=31536000, immutable");
-    res.sendFile(path.join(fontDir, file));
-  });
+  const staticAsset =
+    (dir: string, allowed: Record<string, string>): RequestHandler =>
+    (req, res) => {
+      // Express types a route param as string | string[]; only a single
+      // segment can ever match here, and anything else is not on the list.
+      const file = typeof req.params.file === "string" ? req.params.file : "";
+      const contentType = Object.prototype.hasOwnProperty.call(allowed, file)
+        ? allowed[file]
+        : undefined;
+      if (!contentType) {
+        res.status(404).type("text/plain").send("Not found");
+        return;
+      }
+      res.type(contentType);
+      res.setHeader("Cache-Control", "public, max-age=31536000, immutable");
+      res.sendFile(path.join(__dirname, dir, file));
+    };
+  app.get("/fonts/:file", staticAsset("fonts", FONT_ROUTES));
+  app.get("/img/:file", staticAsset("img", IMAGE_ROUTES));
 
   app.get("/", (_req: Request, res: Response) => {
     res.type("html").send(landingPage({ ...siteInfo, stars: currentStars() }));
   });
   app.get("/privacy", (_req: Request, res: Response) => {
     res.type("html").send(privacyPage({ ...siteInfo, stars: currentStars() }));
+  });
+
+  /**
+   * Crawler directives. Only meaningful on a published deployment: without a
+   * real https origin there is no sitemap URL worth advertising, and a
+   * localhost instance has nothing to crawl.
+   */
+  app.get("/robots.txt", (_req: Request, res: Response) => {
+    const base = canonicalBase(siteInfo.publicUrl);
+    const lines = ["User-agent: *", "Allow: /", "Disallow: /oauth/", "Disallow: /mcp"];
+    if (base) lines.push("", `Sitemap: ${base}/sitemap.xml`);
+    res.type("text/plain").send(lines.join("\n") + "\n");
+  });
+
+  app.get("/sitemap.xml", (_req: Request, res: Response) => {
+    const base = canonicalBase(siteInfo.publicUrl);
+    if (!base) {
+      res.status(404).type("text/plain").send("Not found");
+      return;
+    }
+    const urls = ["/", "/privacy"]
+      .map((p) => `<url><loc>${base}${p}</loc></url>`)
+      .join("");
+    res.type("application/xml").send(
+      `<?xml version="1.0" encoding="UTF-8"?>` +
+      `<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">${urls}</urlset>`
+    );
   });
 
   // Unauthenticated liveness probe. Reveals nothing beyond "the process is up".

@@ -23,6 +23,17 @@ export const FONT_ROUTES = {
 export type FontFile = keyof typeof FONT_ROUTES;
 
 /**
+ * Images, served from dist/img. Just the k-o.pro wordmark: a single black
+ * transparent PNG, flipped to white in dark mode with a CSS filter rather than
+ * shipping a second file (see .site-logo).
+ */
+export const IMAGE_ROUTES = {
+  "k-o-pro.png": "image/png",
+} as const;
+
+export type ImageFile = keyof typeof IMAGE_ROUTES;
+
+/**
  * Latin subsets only, lifted from k-o.pro's Next build. Manrope is the variable
  * body face (200-800), Instrument Serif the display face used for headings.
  *
@@ -116,11 +127,26 @@ const GLASS = `
    0 16px 40px -10px color-mix(in oklch,black 55%,transparent);
  }
 }
+/* Brand-tinted glass, for the one primary action on the page. */
+.glass-brand{
+ -webkit-backdrop-filter:blur(20px) saturate(180%);
+ backdrop-filter:blur(20px) saturate(180%);
+ background:color-mix(in oklch,var(--brand) 92%,transparent);
+ color:oklch(100% 0 0deg);
+ border-top:1px solid color-mix(in oklch,white 55%,transparent);
+ border-right:1px solid color-mix(in oklch,white 28%,transparent);
+ border-bottom:1px solid color-mix(in oklch,black 12%,transparent);
+ border-left:1px solid color-mix(in oklch,white 28%,transparent);
+ box-shadow:
+  inset 0 1px 0 color-mix(in oklch,white 45%,transparent),
+  0 8px 24px -6px color-mix(in oklch,var(--brand) 55%,transparent);
+}
 /* Real Liquid Glass turns opaque when the system asks for less transparency.
    Match that rather than leaving translucent text half-legible for the people
    who explicitly opted out. */
 @media (prefers-reduced-transparency:reduce){
  .glass{-webkit-backdrop-filter:none;backdrop-filter:none;background:var(--card)}
+ .glass-brand{-webkit-backdrop-filter:none;backdrop-filter:none;background:var(--brand)}
 }
 `;
 
@@ -210,9 +236,16 @@ const HEADER_FOOTER = `
 @media (width >= 48rem){.site-head{padding-top:1rem}}
 .head-pill{display:flex;align-items:center;justify-content:space-between;gap:.75rem;
  border-radius:9999px;padding:.55rem .75rem .55rem 1.25rem}
-.head-mark{font-weight:800;font-size:.95rem;letter-spacing:-.01em;
- text-decoration:none;white-space:nowrap}
-.head-mark span{color:var(--muted-foreground);font-weight:600}
+.head-mark{display:inline-flex;align-items:center;gap:.6rem;
+ text-decoration:none;white-space:nowrap;min-width:0}
+/* One black transparent PNG for both themes. Inverting it in dark mode costs
+   nothing and avoids a second asset; the mark is pure black on transparency,
+   so the inverse is exactly the white variant k-o.pro ships. */
+.site-logo{display:block;height:1.6rem;width:auto}
+@media (prefers-color-scheme:dark){.site-logo{filter:invert(1)}}
+.head-sub{color:var(--muted-foreground);font-weight:600;font-size:.85rem;
+ border-left:1px solid var(--border);padding-left:.6rem;display:none}
+@media (width >= 34rem){.head-sub{display:inline}}
 /* The repo link: mark, then the star count as a bordered counter, echoing
    GitHub's own button so the number reads as "stars" without a label. */
 .gh{display:inline-flex;align-items:center;gap:.5rem;text-decoration:none;
@@ -255,6 +288,20 @@ const COMPONENTS = `
 .step{border-left:2px solid var(--brand-mid);padding-left:1.1rem;margin-bottom:1.5rem}
 .step h3{margin-top:0}
 .step p:last-child,.step pre:last-child{margin-bottom:0}
+.cta-row{display:flex;flex-wrap:wrap;align-items:center;gap:.75rem;margin:0 0 1rem}
+.btn{display:inline-flex;align-items:center;gap:.5rem;text-decoration:none;
+ font-weight:700;font-size:.95rem;border-radius:9999px;padding:.7rem 1.35rem;
+ white-space:nowrap;transition:transform .12s ease}
+.btn:hover{transform:translateY(-1px)}
+.btn svg{width:1.05rem;height:1.05rem;flex:none}
+.btn-ghost{border:1px solid var(--border);color:inherit;
+ background:color-mix(in oklch,var(--card) 60%,transparent)}
+.btn-ghost:hover{border-color:color-mix(in oklch,var(--brand) 45%,var(--border))}
+@media (prefers-reduced-motion:reduce){.btn:hover{transform:none}}
+.faq{border-top:1px solid var(--border);padding-top:1.1rem;margin-top:1.1rem}
+.faq h3{margin-top:0}
+.faq p:last-child{margin-bottom:0}
+.tool-name{font-family:var(--font-mono);font-size:.86em;white-space:nowrap}
 `;
 
 /** The GitHub mark, inline because `default-src 'none'` forbids <img>. */
@@ -316,16 +363,68 @@ export interface ShellOptions {
   contactEmail?: string;
   /** Keeps the OAuth-facing pages out of the index. */
   noindex?: boolean;
+  /**
+   * Absolute URL of this page, used for canonical and og:url. Omitted unless
+   * the deployment published a real one — see canonicalBase.
+   */
+  canonical?: string;
+  /** Structured data objects, emitted as application/ld+json. */
+  jsonLd?: unknown[];
+}
+
+/**
+ * The origin to build absolute URLs from, or undefined when there isn't a
+ * trustworthy one.
+ *
+ * publicUrl falls back to `http://127.0.0.1:8787` when GSC_PUBLIC_URL is unset,
+ * and pointing a canonical, og:url or sitemap at that is worse than emitting
+ * nothing: it would tell a crawler the page's real address is a loopback
+ * address. So absolute-URL metadata is gated on an https origin, which only a
+ * genuinely published deployment has.
+ */
+export function canonicalBase(publicUrl: string): string | undefined {
+  try {
+    const url = new URL(publicUrl);
+    return url.protocol === "https:" ? url.origin : undefined;
+  } catch {
+    return undefined;
+  }
 }
 
 export function shell(o: ShellOptions): string {
+  // og:image is deliberately absent: there is no artwork for this service yet,
+  // and a card with a broken image is worse than a text-only one.
+  const social = o.canonical
+    ? [
+        `<link rel="canonical" href="${esc(o.canonical)}">`,
+        `<meta property="og:type" content="website">`,
+        `<meta property="og:site_name" content="Google Search Console MCP">`,
+        `<meta property="og:title" content="${esc(o.title)}">`,
+        o.description ? `<meta property="og:description" content="${esc(o.description)}">` : "",
+        `<meta property="og:url" content="${esc(o.canonical)}">`,
+        `<meta name="twitter:card" content="summary">`,
+      ].filter(Boolean).join("")
+    : "";
+
+  // A <script> body is raw text, so HTML entities are NOT decoded inside it —
+  // running this through esc() would emit `&quot;` and produce invalid JSON that
+  // no consumer can read. Escaping `<` as the JSON string escape \u003c is both
+  // valid JSON and enough to make `</script>` unrepresentable, which is the only
+  // way markup could break out. JSON-LD is a data block rather than executable
+  // script, so `default-src 'none'` permits it — verified in a browser.
+  const structured = (o.jsonLd ?? [])
+    .map((d) => `<script type="application/ld+json">${JSON.stringify(d).replace(/</g, "\\u003c")}</script>`)
+    .join("");
+
   const head = [
     `<meta charset="utf-8">`,
     `<meta name="viewport" content="width=device-width,initial-scale=1">`,
     `<title>${esc(o.title)}</title>`,
     o.description ? `<meta name="description" content="${esc(o.description)}">` : "",
     o.noindex ? `<meta name="robots" content="noindex">` : "",
+    social,
     `<style>${THEME_CSS}</style>`,
+    structured,
   ].filter(Boolean).join("");
 
   const nav = o.repoUrl ? repoLink(o.repoUrl, o.stars) : "";
@@ -338,7 +437,7 @@ export function shell(o: ShellOptions): string {
 
   return `<!doctype html><html lang="en"><head>${head}</head><body>
 <header class="site-head"><div class="wrap"><div class="head-pill glass">
-<a class="head-mark" href="/">gsc<span>.k-o.pro</span></a>
+<a class="head-mark" href="/"><img class="site-logo" src="/img/k-o-pro.png" width="649" height="274" alt="k-o.pro"><span class="head-sub">Search Console MCP</span></a>
 ${nav}
 </div></div></header>
 <main>${o.body}</main>

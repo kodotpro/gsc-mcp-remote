@@ -27,6 +27,7 @@
 import { spawn } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { formatStars, repoLink } from "../dist/web-theme.js";
+import { landingPage } from "../dist/web-pages.js";
 
 const TOKEN = "smoke-test-token-not-a-secret-0123456789";
 const PORT = 20000 + Math.floor(Math.random() * 9000);
@@ -220,6 +221,20 @@ try {
   const strayFont = await fetch(`${BASE}/fonts/not-a-font.woff2`);
   check("an unknown font name is refused", strayFont.status === 404, `got ${strayFont.status}`);
 
+  // Same reasoning for the images the pages reference — the wordmark travels
+  // through the same build-copy step the fonts do.
+  const imgUrls = [...new Set([...rootBody.matchAll(/src="(\/img\/[^"]+)"/g)].map((m) => m[1]))];
+  check("the landing page references the wordmark", imgUrls.length > 0, "no /img/ reference in the markup");
+  for (const url of imgUrls) {
+    const res = await fetch(`${BASE}${url}`);
+    check(
+      `${url} is served`,
+      res.ok && (res.headers.get("content-type") ?? "").startsWith("image/"),
+      `got ${res.status} ${res.headers.get("content-type")}`
+    );
+  }
+  check("CSP permits the same-origin wordmark", /img-src[^;]*'self'/.test(csp), csp);
+
   // The same concern one layer up, and this one shipped broken: `npm run build`
   // gained `node scripts/copy-assets.mjs`, but the Dockerfile's build stage
   // copied only src/, so the image build died on MODULE_NOT_FOUND while every
@@ -253,6 +268,54 @@ try {
     formatStars(999) === "999" && formatStars(1200) === "1.2k" && formatStars(12500) === "13k",
     `${formatStars(999)} / ${formatStars(1200)} / ${formatStars(12500)}`
   );
+
+  // -- crawler-facing metadata -----------------------------------------------
+  // JSON-LD lives in a <script> body, which is raw text: HTML entities are not
+  // decoded there, so escaping it the way the rest of the page is escaped
+  // yields `&quot;` and JSON no consumer can parse. It rendered "fine" and was
+  // silently broken. Parse it rather than grepping for it.
+  const ldBlocks = [...rootBody.matchAll(/<script type="application\/ld\+json">([\s\S]*?)<\/script>/g)]
+    .map((m) => m[1]);
+  check("the landing page emits structured data", ldBlocks.length >= 2, `${ldBlocks.length} block(s)`);
+  let ldTypes = [];
+  try {
+    ldTypes = ldBlocks.map((b) => JSON.parse(b)["@type"]);
+    check("every JSON-LD block parses as JSON", true);
+  } catch (err) {
+    check("every JSON-LD block parses as JSON", false, err.message);
+  }
+  check("structured data describes the software and the FAQ",
+    ldTypes.includes("SoftwareApplication") && ldTypes.includes("FAQPage"), ldTypes.join(","));
+  // No `</script>` may survive into the block, or the element closes early.
+  check("structured data cannot break out of its element",
+    !ldBlocks.some((b) => b.toLowerCase().includes("</script")));
+
+  // This deployment has no GSC_PUBLIC_URL, so publicUrl is a loopback address.
+  // Announcing that as canonical would tell a crawler the page really lives on
+  // 127.0.0.1, so the absolute-URL metadata must be omitted entirely.
+  check("no canonical is claimed without a public https origin", !/rel="canonical"/.test(rootBody));
+  check("no og:url is claimed without a public https origin", !/property="og:url"/.test(rootBody));
+  const noSitemap = await fetch(`${BASE}/sitemap.xml`);
+  check("no sitemap is served without a public https origin", noSitemap.status === 404, `got ${noSitemap.status}`);
+
+  const robots = await fetch(`${BASE}/robots.txt`);
+  const robotsBody = await robots.text();
+  check("robots.txt is served", robots.ok, `got ${robots.status}`);
+  check("robots.txt keeps crawlers out of the auth and MCP routes",
+    /Disallow: \/oauth\//.test(robotsBody) && /Disallow: \/mcp/.test(robotsBody), robotsBody);
+
+  // The published shape, rendered directly: with a real https origin the same
+  // page must claim itself as canonical.
+  const published = landingPage({
+    publicUrl: "https://gsc.example.com",
+    perUserSignIn: true,
+    repoUrl: "https://github.com/kodotpro/gsc-mcp-remote",
+  });
+  check("a published deployment claims its own canonical",
+    published.includes('<link rel="canonical" href="https://gsc.example.com/">'));
+  check("the install link carries the connector URL, encoded",
+    published.includes("connectorUrl=https%3A%2F%2Fgsc.example.com%2Fmcp"),
+    "claude.ai deep link missing or unencoded");
 
   // -- capacity limits -------------------------------------------------------
   const openSession = async () => {

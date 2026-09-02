@@ -7,18 +7,20 @@
  * simplest way to guarantee that: they cannot drift from the deployment, and
  * there is no second thing to host.
  *
- * The privacy text is written from what the code actually does. Two claims in
- * particular are load-bearing for a reviewer and are true here: the hosted
- * sign-in requests only `webmasters.readonly` (see GOOGLE_SCOPES in
- * auth/google-identity.ts), and `disconnect_account` erases the stored
- * credential rather than flagging it (see provider.disconnectUser). Keep them
- * in step with the code — a privacy policy that overstates is worse than none.
+ * Everything either page claims is written from what the code does, because a
+ * Google reviewer reads both on the same domain. Two claims are load-bearing
+ * and true here: the hosted sign-in requests only `webmasters.readonly` (see
+ * GOOGLE_SCOPES in auth/google-identity.ts), and `disconnect_account` erases
+ * the stored credential rather than flagging it (see provider.disconnectUser).
+ * The tool descriptions below are the ones registered in server-factory.ts, and
+ * the three indexing tools are described as unavailable here because they are —
+ * they need a write scope this deployment never requests (see tools/submit-url.ts).
  *
  * Presentation lives in web-theme.ts, which carries k-o.pro's design language
  * within what the Content-Security-Policy allows.
  */
 
-import { esc, shell } from "./web-theme.js";
+import { canonicalBase, esc, shell } from "./web-theme.js";
 
 export interface SiteInfo {
   /** Public base URL, e.g. https://gsc.example.com */
@@ -34,7 +36,147 @@ export interface SiteInfo {
 }
 
 /**
- * Wording note: "Google Search Console MCP" is the phrase people actually
+ * Deep link into claude.ai's "Add custom connector" dialog with the name and
+ * URL pre-filled. Confirmed supported by Anthropic in
+ * anthropics/claude-ai-mcp#74; claude.ai shows its own "verify this URL" notice
+ * when the fields arrive from an external link, so the person still confirms.
+ *
+ * Only claude.ai gets a button. Cursor and VS Code both have install deep links
+ * in circulation, but neither format is stated in their own documentation, and
+ * a button that silently does nothing is worse than a command someone can read.
+ */
+function claudeInstallUrl(mcpUrl: string): string {
+  const params = new URLSearchParams({
+    modal: "add-custom-connector",
+    connectorName: "Google Search Console",
+    connectorUrl: mcpUrl,
+  });
+  return `https://claude.ai/customize/connectors?${params.toString()}`;
+}
+
+const SPARK =
+  `<svg viewBox="0 0 24 24" aria-hidden="true" fill="currentColor">` +
+  `<path d="M12 2l2.2 6.2L20.5 10l-6.3 1.8L12 18l-2.2-6.2L3.5 10l6.3-1.8L12 2Z"/></svg>`;
+
+/** name, what it answers — taken from the registrations in server-factory.ts. */
+const TOOL_GROUPS: { title: string; blurb: string; tools: [string, string][] }[] = [
+  {
+    title: "Find the opportunity",
+    blurb: "Where the traffic you do not have yet is hiding.",
+    tools: [
+      ["quick_wins", "Keywords at positions 4–15 worth pushing to page one"],
+      ["ctr_opportunities", "Pages with the impressions but a CTR far below par for their position"],
+      ["content_gaps", "Demand you already get impressions for but rank beyond 20"],
+      ["content_recommendations", "Quick wins, gaps and cannibalisation cross-referenced into actions"],
+      ["topic_cluster_performance", "How a group of pages performs as one thing"],
+    ],
+  },
+  {
+    title: "Diagnose the problem",
+    blurb: "What changed, and whether it was ranking, CTR or demand.",
+    tools: [
+      ["traffic_drops", "The biggest losses, each with a diagnosed cause"],
+      ["content_decay", "Pages declining across three consecutive 30-day periods"],
+      ["cannibalization_check", "Queries where your own pages compete with each other"],
+      ["check_alerts", "Position drops, CTR collapses, and pages gone from results"],
+      ["ctr_vs_benchmark", "Your CTR per page against the benchmark for that position"],
+    ],
+  },
+  {
+    title: "Look it up",
+    blurb: "The direct questions, answered against live data.",
+    tools: [
+      ["site_snapshot", "Clicks, impressions, CTR and position against the prior period"],
+      ["advanced_search_analytics", "A custom query with your own dimensions and filters"],
+      ["inspect_url", "Whether a URL is indexed, and why it is not"],
+      ["verify_claim", "Check a number against live data before it goes in the deck"],
+      ["generate_report", "A full markdown performance report"],
+      ["multi_site_dashboard", "One health check across many properties at once"],
+      ["list_properties", "Every property this account can reach, with permission level"],
+      ["list_sitemaps", "Submitted sitemaps with status, errors and indexed counts"],
+    ],
+  },
+  {
+    title: "Image search",
+    blurb: "Google's <code>type=image</code> surface, which most tools skip entirely.",
+    tools: [
+      ["image_keyword_overview", "Top image-search keywords for the site"],
+      ["image_search_quick_wins", "Image queries at positions 4–15 with real impressions"],
+      ["image_pages_overview", "Pages ranked by image-search performance"],
+      ["image_keyword_trends", "Period-over-period movement for image queries"],
+      ["image_impressions_no_clicks", "Real image impressions earning effectively zero clicks"],
+      ["image_content_decay", "The decay check, run against image search"],
+      ["compare_web_vs_image", "Each query side by side across web and image"],
+      ["image_page_audit", "Audits images on your own pages for what drives image ranking"],
+    ],
+  },
+  {
+    title: "AI search, and your account",
+    blurb: "The newer surface, plus the controls over your own data.",
+    tools: [
+      ["genai_conversation_queries", "AI-conversation exhaust hiding in ordinary query data"],
+      ["set_default_property", "Save a default property so later calls can omit it"],
+      ["export_my_data", "Everything this server stores about you"],
+      ["disconnect_account", "Erase all of it and end your sessions"],
+    ],
+  },
+];
+
+function toolTable(group: (typeof TOOL_GROUPS)[number]): string {
+  const rows = group.tools
+    .map(([name, what]) => `<tr><td><span class="tool-name">${esc(name)}</span></td><td>${what}</td></tr>`)
+    .join("");
+  return `<h3>${esc(group.title)}</h3>
+  <p class="note">${group.blurb}</p>
+  <table>${rows}</table>`;
+}
+
+/** Answers here must stay traceable to the code or the README. */
+const FAQ: [string, string][] = [
+  [
+    "What is an MCP server?",
+    "Model Context Protocol is an open standard for connecting AI clients to " +
+    "outside systems. An MCP server exposes a set of tools; the client decides " +
+    "when to call them. This one exposes Search Console, so Claude can answer " +
+    "questions about your search data without you exporting anything.",
+  ],
+  [
+    "Do I need to install anything?",
+    "No. It runs as a hosted remote MCP server, so you add it by URL and sign " +
+    "in with Google. If you would rather your Google token never left your own " +
+    "machine, the same server runs locally over stdio — the repository has the " +
+    "instructions.",
+  ],
+  [
+    "Can it change anything in my Search Console?",
+    "No. The hosted service requests one Google permission, " +
+    "<code>webmasters.readonly</code>, plus your email address to identify you. " +
+    "It cannot edit properties, change sitemaps, or submit URLs for indexing. " +
+    "Google's own per-property permissions apply on top, so you see exactly the " +
+    "properties Google would show you.",
+  ],
+  [
+    "Does it work across all my properties?",
+    "Yes — that is the main reason it exists. Every property-scoped tool takes " +
+    "the property as a parameter, so one connection covers your whole account. " +
+    "You never edit a config file and restart to look at a different site.",
+  ],
+  [
+    "Is my Search Console data stored anywhere?",
+    "No. Each question is answered by fetching live from Google's API and " +
+    "handing the result back to your Claude client; nothing is retained " +
+    "afterwards. What is stored is your email, your Google account identifier, " +
+    "an encrypted refresh token, and your chosen default property.",
+  ],
+  [
+    "Is it free, and is it open source?",
+    "The software is open source under Apache 2.0 and the hosted instance is " +
+    "free to use. You can read exactly what runs here, or run your own copy.",
+  ],
+];
+
+/**
+ * Wording note: "google search console mcp" is the phrase people actually
  * search for (390/mo US, and roughly doubling quarter on quarter as of
  * 2026-09), well ahead of "search console mcp", "gsc mcp" and
  * "seo mcp server". It leads the title and the h1 for that reason; the rest of
@@ -42,24 +184,48 @@ export interface SiteInfo {
  */
 export function landingPage(info: SiteInfo): string {
   const mcpUrl = `${info.publicUrl}/mcp`;
+  const base = canonicalBase(info.publicUrl);
+  const installUrl = claudeInstallUrl(mcpUrl);
+
+  const heroCta = info.perUserSignIn
+    ? `<div class="cta-row">
+      <a class="btn glass-brand" href="${esc(installUrl)}" rel="noopener">${SPARK}Add to Claude</a>
+      <a class="btn btn-ghost" href="#connecting">Other clients</a>
+    </div>
+    <p class="note">Opens claude.ai with the connector pre-filled. You confirm the
+       URL, then sign in with Google.</p>`
+    : "";
 
   const connect = info.perUserSignIn
     ? `<div class="step">
-    <h3>1. Add the connector</h3>
-    <p>In claude.ai, open <strong>Settings &rarr; Connectors &rarr; Add custom
-       connector</strong> and paste this URL:</p>
-    <pre><code>${esc(mcpUrl)}</code></pre>
+    <h3>claude.ai and Claude Desktop</h3>
+    <p>One click adds it with the details filled in — claude.ai will ask you to
+       confirm the address before anything connects:</p>
+    <div class="cta-row">
+      <a class="btn glass-brand" href="${esc(installUrl)}" rel="noopener">${SPARK}Add to Claude</a>
+    </div>
+    <p class="note">Prefer to do it by hand? <strong>Settings &rarr; Connectors &rarr;
+       Add custom connector</strong>, and paste the URL below.</p>
   </div>
   <div class="step">
-    <h3>2. Or add it in Claude Code</h3>
+    <h3>Claude Code</h3>
     <pre><code>claude mcp add --transport http gsc ${esc(mcpUrl)}</code></pre>
   </div>
   <div class="step">
-    <h3>3. Sign in with Google</h3>
-    <p>A browser tab opens the first time you use it. You sign in with your own
-       Google account, and Google&rsquo;s own Search Console permissions decide what
-       you can see — this service cannot show you a property Google would not
-       show you, and it never gains write access.</p>
+    <h3>Any other MCP client</h3>
+    <p>It is a standard remote MCP server over Streamable HTTP. Point any client
+       that supports remote MCP at:</p>
+    <pre><code>${esc(mcpUrl)}</code></pre>
+  </div>
+  <div class="step">
+    <h3>What happens the first time</h3>
+    <p>Your browser opens two screens, in this order. First <strong>this server's
+       own consent page</strong>, naming the application that asked and the exact
+       address the result will be sent to — it exists so a connection request you
+       did not start is refusable. Then <strong>Google's sign-in</strong>, asking
+       for read-only Search Console access and your email address, and nothing
+       else.</p>
+    <p>Then ask: <em>&ldquo;List my Search Console properties.&rdquo;</em></p>
   </div>`
     : `<div class="step">
     <h3>This instance is not open for sign-ups</h3>
@@ -67,6 +233,14 @@ export function landingPage(info: SiteInfo): string {
        per-user Google sign-in. If you reached this page looking for the
        software itself, the repository explains how to run your own copy.</p>
   </div>`;
+
+  const repoLine = info.repoUrl
+    ? `<p>The code that runs here is at
+       <a href="${esc(info.repoUrl)}" rel="noopener">${esc(info.repoUrl.replace(/^https?:\/\//, ""))}</a>,
+       under Apache 2.0. You can read exactly what this service does, or run your
+       own copy with your own Google credentials — the same 33 tools, over stdio
+       or as your own hosted deployment.</p>`
+    : "";
 
   const body = `
 <section class="hero">
@@ -77,6 +251,7 @@ export function landingPage(info: SiteInfo): string {
     <p class="lede">Connect Search Console to Claude and ask what your data
        <em>means</em> — across every property in your account, in plain English,
        without exporting a single CSV.</p>
+    ${heroCta}
     <ul class="pill-row">
       <li>33 tools</li>
       <li>Read-only access</li>
@@ -87,9 +262,12 @@ export function landingPage(info: SiteInfo): string {
 </section>
 
 <div class="wrap page-body">
+  <h2 id="connecting">Connecting</h2>
+  ${connect}
+
   <h2>What you can ask</h2>
-  <p>Once connected, you ask your Claude client questions instead of reading raw
-     API rows:</p>
+  <p>Once connected, you ask questions instead of reading API rows. The answer
+     comes back as a diagnosis, not a spreadsheet you still have to interpret:</p>
   <div class="grid grid-2">
     <div class="card">
       <h3>&ldquo;What am I almost ranking for?&rdquo;</h3>
@@ -112,14 +290,33 @@ export function landingPage(info: SiteInfo): string {
          looking.</p>
     </div>
   </div>
-  <p>Thirty-three tools cover quick wins, traffic-drop diagnosis, content decay
-     and gaps, cannibalisation, CTR benchmarking, topic clusters, multi-property
-     dashboards, URL inspection and a full image-search suite. Every
-     property-scoped tool takes the property as a parameter, so one connection
-     covers your whole account rather than a single site.</p>
+  <p>Every answer carries provenance: which property it came from, the exact
+     parameters used, and the date range. An answer is never ambiguous about
+     which site it describes. <code>position</code> is labelled as the
+     impression-weighted average it actually is, rather than being passed off as
+     a rank-tracker position.</p>
 
-  <h2>Connecting</h2>
-  ${connect}
+  <h2>The 33 tools</h2>
+  <p>Grouped by what you would reach for them to do. Each one takes the property
+     as a parameter, so a single connection covers every site in your account.</p>
+  ${TOOL_GROUPS.map(toolTable).join("\n")}
+  <p class="note">The three indexing tools — <span class="tool-name">submit_url</span>,
+     <span class="tool-name">submit_batch</span> and
+     <span class="tool-name">submit_sitemap</span> — are part of the software but
+     cannot run on this hosted instance: they need write access to your Google
+     account, which this service never requests. They work on a self-hosted
+     install configured with wider scopes.</p>
+
+  <h2>Why a remote server</h2>
+  <p>Most MCP servers are local-only: one process, on one laptop, holding one
+     credential. That is why they cannot be shared, and why the claude.ai and
+     Claude Desktop connector interfaces cannot add them at all.</p>
+  <p>This one runs as a hosted service over Streamable HTTP, and implements the
+     MCP authorization spec properly — dynamic client registration, PKCE,
+     rotating tokens, and a consent screen of its own. That is what lets a
+     connector interface onboard it from nothing but a URL. It also means a team
+     shares one deployment while each person signs in as themselves and sees only
+     their own properties. Nobody copies a credential anywhere.</p>
 
   <h2>What it reads, and what it stores</h2>
   <ul>
@@ -132,26 +329,68 @@ export function landingPage(info: SiteInfo): string {
         asking you to sign in every time.</li>
     <li>It does not store your Search Console data. Results are fetched live for
         each question and passed straight back to your Claude client.</li>
+    <li>Your refresh token is encrypted with AES-256-GCM under a key held outside
+        the database. Tokens issued to your client are stored only as hashes,
+        expire after an hour, and rotate on refresh.</li>
   </ul>
   <p>Ask your Claude client to run <code>export_my_data</code> to see everything
      held about you, or <code>disconnect_account</code> to erase it. The full
      detail is in the <a href="/privacy">privacy policy</a>.</p>
+
+  <h2>Running your own</h2>
+  ${repoLine}
+
+  <h2>Questions</h2>
+  ${FAQ.map(([q, a]) => `<div class="faq"><h3>${esc(q)}</h3><p>${a}</p></div>`).join("\n")}
 </div>`;
+
+  const description =
+    "A Google Search Console MCP server for Claude. Ask about quick wins, " +
+    "traffic drops, cannibalisation and content decay across every property in " +
+    "your account — read-only, open source, nothing to install.";
+
+  const jsonLd: unknown[] = [
+    {
+      "@context": "https://schema.org",
+      "@type": "SoftwareApplication",
+      name: "Google Search Console MCP",
+      applicationCategory: "DeveloperApplication",
+      operatingSystem: "Any",
+      description,
+      ...(base ? { url: base } : {}),
+      ...(info.repoUrl ? { codeRepository: info.repoUrl } : {}),
+      license: "https://www.apache.org/licenses/LICENSE-2.0",
+      offers: { "@type": "Offer", price: "0", priceCurrency: "USD" },
+    },
+    {
+      "@context": "https://schema.org",
+      "@type": "FAQPage",
+      mainEntity: FAQ.map(([q, a]) => ({
+        "@type": "Question",
+        name: q,
+        acceptedAnswer: {
+          "@type": "Answer",
+          // Schema.org answers are plain prose; strip the inline markup.
+          text: a.replace(/<[^>]+>/g, ""),
+        },
+      })),
+    },
+  ];
 
   return shell({
     title: "Google Search Console MCP server for Claude",
-    description:
-      "A Google Search Console MCP server for Claude. Ask about quick wins, " +
-      "traffic drops, cannibalisation and content decay across every property " +
-      "in your account — read-only, open source.",
+    description,
     body,
     repoUrl: info.repoUrl,
     stars: info.stars,
     contactEmail: info.contactEmail,
+    canonical: base ? `${base}/` : undefined,
+    jsonLd,
   });
 }
 
 export function privacyPage(info: SiteInfo): string {
+  const base = canonicalBase(info.publicUrl);
   const host = (() => {
     try {
       return new URL(info.publicUrl).host;
@@ -263,5 +502,6 @@ export function privacyPage(info: SiteInfo): string {
     repoUrl: info.repoUrl,
     stars: info.stars,
     contactEmail: info.contactEmail,
+    canonical: base ? `${base}/privacy` : undefined,
   });
 }

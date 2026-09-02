@@ -17,7 +17,7 @@ import { fileURLToPath } from "node:url";
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 
 /** Directories under src/ copied verbatim into dist/. */
-const ASSET_DIRS = ["fonts"];
+const ASSET_DIRS = ["fonts", "img"];
 
 for (const dir of ASSET_DIRS) {
   const from = path.join(root, "src", dir);
