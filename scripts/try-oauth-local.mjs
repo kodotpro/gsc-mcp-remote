@@ -69,7 +69,13 @@ Then run this script with the credentials in the environment:
     GSC_GOOGLE_CLIENT_ID=... GSC_GOOGLE_CLIENT_SECRET=... node scripts/try-oauth-local.mjs
 
 You can add the loopback URI to the SAME client that serves production — a
-client may hold several redirect URIs, and Google permits http for localhost.`
+client may hold several redirect URIs, and Google permits http for localhost.
+
+${bold("Also required:")} while the consent screen is in Testing status, the Google
+account you sign in with must be listed as a ${bold("test user")} on it. Without
+that, Google returns access_denied before this server's consent page is
+ever reached, and the failure looks like a bug in the flow rather than a
+missing entry in a list.`
   );
 }
 
@@ -172,7 +178,9 @@ in this order:
      found in the audit; it should say the redirect is a recognised Claude
      address, with no red warning.
   2. ${bold("Google's sign-in and consent screen")}, asking only for read-only Search
-     Console access plus your email.
+     Console access plus your email. If you get ${bold("access_denied")} here, the
+     account is not a listed test user on the consent screen — add it in
+     Google Cloud Console; nothing is wrong with the server.
   3. Back to the client, connected.
 
 Then ask it: ${bold('"list my Search Console properties"')} — and try a real question,
