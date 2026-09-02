@@ -46,3 +46,11 @@ jobs:
       # classification, fetch deadlines/byte caps, report path confinement.
       - name: Hardening regression tests
         run: node scripts/check-hardening.mjs
+
+      # Catches NEW advisories in the dependency tree. The gate is `critical`
+      # rather than `high` because one high is knowingly carried: image-size
+      # has no fixed release, and it is mitigated in code by refusing to hand
+      # the affected formats (ICNS/JXL/HEIF) to the parser at all — which
+      # scripts/check-hardening.mjs asserts.
+      - name: Dependency advisories
+        run: npm audit --omit=dev --audit-level=critical

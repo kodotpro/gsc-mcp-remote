@@ -14,6 +14,7 @@ import http from "node:http";
 import path from "node:path";
 import { isPrivateAddress, assertPublicUrl, safeFetch } from "../dist/net-guard.js";
 import { confineReportPath } from "../dist/tools/generate-report.js";
+import { sniffImageFormat, dimensionsAreSafeFor } from "../dist/tools/image-page-audit.js";
 
 const failures = [];
 const check = (label, ok, detail = "") => {
@@ -122,6 +123,52 @@ const escaped = escapes.filter((p) => {
 });
 check(`${escapes.length} traversal attempts all confined`, escaped.length === 0, escaped.join(", "));
 check("a plain filename is preserved", path.basename(confineReportPath("weekly.md", "2026-01-01")) === "weekly.md");
+
+// ---------------------------------------------------------------------------
+console.log("\nImage parser exposure");
+// ---------------------------------------------------------------------------
+// image-size has unfixed advisories for infinite loops in its ICNS, JXL and
+// HEIF readers (GHSA-w3rx-r6r6-pgpr, GHSA-5p2g-fcmc-qvqq). The loop is
+// synchronous, so a timeout cannot interrupt it: one crafted image would spin
+// the event loop and hang every tenant. The defence is to decide the format
+// from the file's own magic bytes and never hand those families to the parser.
+const b = (...bytes) => Buffer.from(bytes);
+const pad = (buf) => Buffer.concat([buf, Buffer.alloc(Math.max(0, 32 - buf.length))]);
+
+const SAMPLES = [
+  ["jpeg", pad(b(0xff, 0xd8, 0xff, 0xe0)), true],
+  ["png",  pad(b(0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a)), true],
+  ["gif",  pad(Buffer.from("GIF89a", "latin1")), true],
+  ["webp", pad(Buffer.concat([Buffer.from("RIFF", "latin1"), b(0, 0, 0, 0), Buffer.from("WEBP", "latin1")])), true],
+  ["bmp",  pad(b(0x42, 0x4d)), true],
+  ["tiff", pad(b(0x49, 0x49, 0x2a, 0x00)), true],
+  ["tiff", pad(b(0x4d, 0x4d, 0x00, 0x2a)), true],
+  ["svg",  pad(Buffer.from('<svg xmlns="http://www.w3.org/2000/svg">', "latin1")), true],
+  // The three vulnerable families must be recognised AND refused.
+  ["icns", pad(Buffer.from("icns", "latin1")), false],
+  ["jxl",  pad(b(0xff, 0x0a)), false],
+  ["jxl",  pad(b(0x00, 0x00, 0x00, 0x0c, 0x4a, 0x58, 0x4c, 0x20, 0x0d, 0x0a, 0x87, 0x0a)), false],
+  ["avif", pad(Buffer.concat([b(0, 0, 0, 0x20), Buffer.from("ftypavif", "latin1")])), false],
+  ["heic", pad(Buffer.concat([b(0, 0, 0, 0x20), Buffer.from("ftypheic", "latin1")])), false],
+];
+
+const misread = SAMPLES.filter(([want, buf]) => sniffImageFormat(buf) !== want)
+  .map(([want, buf]) => `${want} read as ${sniffImageFormat(buf)}`);
+check(`${SAMPLES.length} formats identified from magic bytes`, misread.length === 0, misread.join("; "));
+
+const wrongGate = SAMPLES.filter(([, buf, safe]) => dimensionsAreSafeFor(sniffImageFormat(buf)) !== safe)
+  .map(([want]) => want);
+check("the vulnerable parsers are gated off, the safe ones allowed", wrongGate.length === 0, wrongGate.join(", "));
+
+// A Content-Type header is attacker-controlled, so it must never be what
+// decides which parser runs.
+const heicBytes = pad(Buffer.concat([b(0, 0, 0, 0x20), Buffer.from("ftypheic", "latin1")]));
+check(
+  "a HEIC mislabelled as image/png is still refused",
+  dimensionsAreSafeFor(sniffImageFormat(heicBytes)) === false
+);
+check("an unidentifiable file is refused rather than guessed", sniffImageFormat(pad(b(0x00, 0x01, 0x02, 0x03))) === null);
+check("a truncated file is refused", sniffImageFormat(b(0xff, 0xd8)) === null);
 
 if (failures.length > 0) {
   console.error(`\nHardening tests: ${failures.length} failure(s).`);

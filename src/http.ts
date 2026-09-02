@@ -41,6 +41,7 @@ import { createServer, SERVER_VERSION } from "./server-factory.js";
 import { setRemoteMode } from "./runtime.js";
 import { runWithUserContext, type UserContext } from "./request-context.js";
 import { deniedPage } from "./auth/consent.js";
+import { landingPage, privacyPage, type SiteInfo } from "./web-pages.js";
 
 type HttpAuthMode = "bearer" | "oauth";
 
@@ -58,7 +59,8 @@ const startedAt = Date.now();
 
 /** Sessions untouched for this long are closed by the sweeper. */
 const IDLE_TIMEOUT_MS = Number(process.env.GSC_HTTP_IDLE_TIMEOUT_MS ?? 30 * 60 * 1000);
-const SWEEP_INTERVAL_MS = 60 * 1000;
+/** How often the idle sweep runs. Configurable so tests need not wait a minute. */
+const SWEEP_INTERVAL_MS = Number(process.env.GSC_HTTP_SWEEP_INTERVAL_MS ?? 60 * 1000);
 
 /**
  * Capacity limits.
@@ -90,7 +92,19 @@ function rateLimitExceeded(key: string): { limited: boolean; retryAfter: number 
   return { limited: false, retryAfter: 0 };
 }
 
+/**
+ * How many live sessions one identified user holds.
+ *
+ * Only meaningful in oauth mode. In bearer mode every session's owner is null
+ * (one shared credential, no per-request identity), so counting nulls here
+ * would apply the PER-USER ceiling to the WHOLE server: the 9th session of a
+ * single-tenant deployment was rejected with "you already have 8 open
+ * sessions" while /healthz advertised a limit of 120. Bearer sessions are
+ * bounded by MAX_SESSIONS alone, which is the only limit that has a meaning
+ * when there is exactly one tenant.
+ */
 function sessionsOwnedBy(userId: string | null): number {
+  if (userId === null) return 0;
   let n = 0;
   for (const s of sessions.values()) if (s.userId === userId) n++;
   return n;
@@ -270,6 +284,48 @@ export async function startHttpServer(): Promise<HttpServer> {
   const app = createMcpExpressApp({ host, allowedHosts: hostAllowlist });
   app.set("trust proxy", 1);
 
+  /**
+   * Browser hardening for the HTML this server serves.
+   *
+   * The consent interstitial exists to make one fact refusable: which client
+   * receives the authorization result. Framing it would defeat that, so it
+   * must not be frameable. There is no JavaScript anywhere in these pages, so
+   * the policy can be maximally strict — `default-src 'none'` with inline
+   * styles the only exception, and form submissions confined to this origin.
+   * The headers are harmless on the JSON routes.
+   */
+  app.use((_req: Request, res: Response, next) => {
+    res.setHeader("X-Frame-Options", "DENY");
+    res.setHeader("X-Content-Type-Options", "nosniff");
+    res.setHeader("Referrer-Policy", "no-referrer");
+    res.setHeader(
+      "Content-Security-Policy",
+      "default-src 'none'; style-src 'unsafe-inline'; form-action 'self'; " +
+      "frame-ancestors 'none'; base-uri 'none'"
+    );
+    // Ignored by browsers over plain http, so it is safe to set unconditionally.
+    res.setHeader("Strict-Transport-Security", "max-age=31536000; includeSubDomains");
+    next();
+  });
+
+  // -- public pages -----------------------------------------------------------
+  // Google's verification for a sensitive scope requires a home page and a
+  // privacy policy on the same domain as the OAuth callback. Serving them here
+  // means they cannot drift from the deployment they describe.
+  const siteInfo: SiteInfo = {
+    publicUrl: (process.env.GSC_PUBLIC_URL?.trim() || `http://${host}:${port}`).replace(/\/+$/, ""),
+    contactEmail: process.env.GSC_CONTACT_EMAIL?.trim() || undefined,
+    repoUrl: process.env.GSC_REPO_URL?.trim() || "https://github.com/kodotpro/gsc-mcp-remote",
+    perUserSignIn: mode === "oauth",
+  };
+
+  app.get("/", (_req: Request, res: Response) => {
+    res.type("html").send(landingPage(siteInfo));
+  });
+  app.get("/privacy", (_req: Request, res: Response) => {
+    res.type("html").send(privacyPage(siteInfo));
+  });
+
   // Unauthenticated liveness probe. Reveals nothing beyond "the process is up".
   app.get("/healthz", (_req: Request, res: Response) => {
     res.json({
@@ -280,6 +336,11 @@ export async function startHttpServer(): Promise<HttpServer> {
       uptimeSeconds: Math.round((Date.now() - startedAt) / 1000),
       activeSessions: sessions.size,
       sessionLimit: MAX_SESSIONS,
+      // Reported so the documented limits can be verified against a running
+      // server rather than trusted. The per-user ceiling only bites in oauth
+      // mode, where requests carry an identity.
+      perUserSessionLimit: mode === "oauth" ? MAX_SESSIONS_PER_USER : null,
+      requestsPerMinute: RATE_LIMIT_PER_MIN,
     });
   });
 

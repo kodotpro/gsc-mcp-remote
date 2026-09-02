@@ -33,5 +33,10 @@ Modifications in this fork (see README for detail):
     connect-time address validation, bounded fetches, an authorization consent
     interstitial, session and rate limits, a row ceiling on Search Analytics
     pagination, report-path confinement, and user data deletion/export.
+  - Serves its own public pages: a service description and a privacy policy,
+    which Google's OAuth verification requires on the callback's own domain.
+  - Bounded Google API calls, browser-hardening headers on the authorization
+    pages, magic-byte format gating before image parsing, and continuous
+    replication of the token database.
 
 This fork is not affiliated with or endorsed by the original author.

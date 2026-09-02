@@ -14,6 +14,7 @@
 import { google, searchconsole_v1 } from "googleapis";
 import type { GscOAuthProvider } from "./provider.js";
 import type { GoogleIdentityLike } from "./google-identity.js";
+import { GOOGLE_TIMEOUT_MS } from "../auth.js";
 
 const CACHE_TTL_MS = 15 * 60 * 1000;
 
@@ -53,7 +54,7 @@ export class UserClientFactory {
       throw err;
     }
 
-    const sc = google.searchconsole({ version: "v1", auth });
+    const sc = google.searchconsole({ version: "v1", auth, timeout: GOOGLE_TIMEOUT_MS });
     this.cache.set(userId, { sc, expiresAt: Date.now() + CACHE_TTL_MS });
     return sc;
   }

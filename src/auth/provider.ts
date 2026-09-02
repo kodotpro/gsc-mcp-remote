@@ -40,7 +40,7 @@ export interface GscOAuthProviderOptions {
   db: AuthDb;
   vaultKey: Buffer;
   identity: GoogleIdentityLike;
-  /** Canonical resource identifier tokens are bound to, e.g. https://gsc.k-o.pro/mcp */
+  /** Canonical resource identifier tokens are bound to, e.g. https://gsc.example.com/mcp */
   resourceUrl: string;
 }
 

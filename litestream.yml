@@ -1,0 +1,47 @@
+# Continuous replication for the OAuth database.
+#
+# What is worth backing up here is small but not reproducible: who has
+# connected, and their encrypted Google refresh tokens. Losing it does not
+# lose anyone's Search Console data (none is stored) — every user simply
+# signs in again — but on a hosted service that means every user is logged
+# out at once, with no way to tell them why. Replication turns that from an
+# incident into a restore.
+#
+# Litestream streams the SQLite WAL, so recovery is to the last second or so
+# rather than to the last nightly dump. It runs as a sidecar sharing the data
+# volume; see docker-compose.yml (profile: backup).
+#
+# ---------------------------------------------------------------------------
+# IMPORTANT — do NOT add the vault key to this file.
+#
+# The refresh tokens in this database are encrypted with the key at
+# /data/.gsc-mcp/vault.key. Replicating that key into the same bucket as the
+# ciphertext would put the lock and its key in one place and defeat the
+# encryption entirely. Back the key up out of band: it is 64 hex characters,
+# so a password manager is the right home for it. Keep it, and a restored
+# database works. Lose it, and the restore still works — the stored Google
+# connections are simply dead and each user reconnects once.
+# ---------------------------------------------------------------------------
+#
+# Env vars are expanded by Litestream, and come from .env:
+#   LITESTREAM_BUCKET, LITESTREAM_ENDPOINT,
+#   LITESTREAM_ACCESS_KEY_ID, LITESTREAM_SECRET_ACCESS_KEY
+#
+# Any S3-compatible store works. Cloudflare R2 has no egress charge, which
+# suits a database this small:
+#   endpoint: https://<account-id>.r2.cloudflarestorage.com
+
+dbs:
+  - path: /data/.gsc-mcp/oauth-server.db
+    replicas:
+      - type: s3
+        bucket: ${LITESTREAM_BUCKET}
+        endpoint: ${LITESTREAM_ENDPOINT}
+        path: gsc-mcp/oauth-server.db
+        access-key-id: ${LITESTREAM_ACCESS_KEY_ID}
+        secret-access-key: ${LITESTREAM_SECRET_ACCESS_KEY}
+        # Keep a generation for a month, with a full snapshot each day, so a
+        # restore can target a point before a bad migration or a bad actor.
+        retention: 720h
+        snapshot-interval: 24h
+        sync-interval: 10s

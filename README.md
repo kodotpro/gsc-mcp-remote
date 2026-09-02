@@ -17,6 +17,8 @@ Two things make it different from other GSC MCP servers:
 - [Quick start (local)](#quick-start-local)
 - [Multi-property](#multi-property)
 - [Remote mode](#remote-mode)
+  - [Test it locally first](#rehearse-the-real-sign-in-locally)
+  - [Backups](#backups)
 - [All 33 tools](#all-33-tools)
 - [Environment variables](#environment-variables)
 - [Credits](#credits)
@@ -279,42 +281,87 @@ docker compose logs -f --tail 50
 docker compose up -d --build   # after a git pull
 ```
 
-The server logs session open/close events and token refreshes, never tokens or query data. In OAuth mode, state lives in two files on the data volume: the SQLite database (users, registrations, token hashes, encrypted Google refresh tokens) and the vault key. Losing the vault key is survivable by design — every user just reconnects. `/healthz` reports active session count. Sessions idle for 30 minutes are closed automatically (`GSC_HTTP_IDLE_TIMEOUT_MS`).
+The server logs session open/close events and token refreshes, never tokens or query data. In OAuth mode, state lives in two files on the data volume: the SQLite database (users, registrations, token hashes, encrypted Google refresh tokens) and the vault key. Losing either is survivable by design — every user just reconnects — but on a service with real users that means signing everyone out at once, so see [Backups](#backups) before a second person depends on it. `/healthz` reports the active session count and the limits in force. Sessions idle for 30 minutes are closed automatically (`GSC_HTTP_IDLE_TIMEOUT_MS`).
 
 Memory is capped at 512 MB with Node's heap at 384 MB, deliberately: Search Analytics results are accumulated in memory and a large property over a long window can be tens of megabytes, so the cap keeps this service from starving anything else on the box.
 
-Three limits stop one caller from taking the process down, since each session holds its own tool registry (~440 KB, so roughly 900 sessions would exhaust the heap):
+Four limits stop one caller from taking the process down, since each session holds its own tool registry (~440 KB, so roughly 900 sessions would exhaust the heap):
 
-| Limit | Default | Variable |
-|---|---|---|
-| Concurrent sessions, server-wide | 120 | `GSC_MAX_SESSIONS` |
-| Concurrent sessions per user | 8 | `GSC_MAX_SESSIONS_PER_USER` |
-| Requests per user per minute | 60 | `GSC_RATE_LIMIT_PER_MIN` |
-| Rows accumulated per query | 100,000 | `GSC_MAX_TOTAL_ROWS` |
+| Limit | Default | Variable | Applies in |
+|---|---|---|---|
+| Concurrent sessions, server-wide | 120 | `GSC_MAX_SESSIONS` | both modes |
+| Concurrent sessions per user | 8 | `GSC_MAX_SESSIONS_PER_USER` | `oauth` only |
+| Requests per user per minute | 60 | `GSC_RATE_LIMIT_PER_MIN` | both modes |
+| Rows accumulated per query | 100,000 | `GSC_MAX_TOTAL_ROWS` | both modes |
+| Deadline per Google API call | 60 s | `GSC_GOOGLE_TIMEOUT_MS` | both modes |
 
 Exceeding them returns `429` (or `503` at the server-wide session ceiling) with `Retry-After`, rather than an OOM. A query that hits the row ceiling says so in its response instead of silently reporting partial data.
 
+The per-user ceiling needs a per-request identity, so it only means anything in `oauth` mode; bearer mode has one tenant and is bounded by `GSC_MAX_SESSIONS` alone. `/healthz` reports the limits actually in force — including `perUserSessionLimit: null` in bearer mode — so the table above can be checked against a running server rather than trusted.
+
+### The public pages
+
+The server serves two pages of its own, at `/` and `/privacy`: a description of the service, and a privacy policy written from what the code actually does. They are not decoration — Google's verification for a sensitive scope requires a home page **and** a privacy policy reachable over HTTPS on the same domain as the OAuth callback, and serving them from this process means they cannot drift from the deployment they describe.
+
+Set `GSC_CONTACT_EMAIL` before submitting for verification; the privacy page states plainly when no contact address is published. `GSC_REPO_URL` sets the source link.
+
+Both pages, and the authorization consent interstitial, are served with `X-Frame-Options: DENY` and a `default-src 'none'` CSP. The consent page exists to make one fact refusable — which client receives the authorization result — so it must not be frameable.
+
+### Backups
+
+In OAuth mode the SQLite database is the one piece of state that is small but not reproducible: who has connected, and their encrypted Google refresh tokens. Losing it loses nobody's Search Console data — none is stored — but it signs every user out at once with no way to tell them why.
+
+A Litestream sidecar replicates it continuously to any S3-compatible bucket (Cloudflare R2 has no egress charge, which suits a database this size). It is opt-in, so an existing deployment is unaffected until you fill the `LITESTREAM_*` variables in `.env`:
+
+```bash
+docker compose --profile backup up -d
+```
+
+To restore, with the app stopped:
+
+```bash
+docker compose --profile backup run --rm --entrypoint litestream litestream restore -config /etc/litestream.yml /data/.gsc-mcp/oauth-server.db
+```
+
+**The vault key is deliberately not replicated.** The refresh tokens in that database are encrypted with the key at `data/.gsc-mcp/vault.key`; shipping it to the same bucket as the ciphertext would put the lock and the key in one place and defeat the encryption. Copy its 64 hex characters into a password manager instead. Keep it and a restore is complete; lose it and the restore still works — the stored Google connections are simply dead, and each user reconnects once.
+
 ### Self-checks
 
-Four test suites run without any Google credentials, so they are safe to run anywhere — they are what CI runs:
+Four suites run without any Google credentials, so they are safe to run anywhere — they are what CI runs:
 
 ```bash
 node scripts/check-tools.mjs
 ```
 
+Asserts every tool registers over stdio and that the right ones expose `site_url` — it fails if a tool silently loses the parameter.
+
 ```bash
 node scripts/check-http.mjs
 ```
 
-The first asserts every tool registers over stdio and that the right ones expose `site_url` — it fails if a tool silently loses the parameter. The second boots bearer-mode HTTP with a throwaway token and checks the health endpoint, token enforcement, that a session lists all 33 tools, and that teardown leaves none behind. The fourth is a regression suite for the hardening fixes: SSRF address classification across 34 address forms, fetch deadlines and byte caps against a deliberately hostile server, redirect re-validation, and report-path confinement. The third covers OAuth mode end to end without Google: the sandwich, PKCE, single-use codes, refresh rotation and reuse-burning, audience binding, the revocation cascade, discovery metadata, DCR, and that one user's session rejects another user's valid token:
+Boots bearer-mode HTTP with a throwaway token: the health endpoint, token enforcement, a session listing all 33 tools, teardown, the capacity limits (session ceiling → `503`, rate limit → `429`, both with `Retry-After`), the idle sweeper reclaiming abandoned sessions, and the public pages with their anti-framing headers.
 
 ```bash
 node scripts/check-oauth.mjs
 ```
 
+Covers OAuth mode end to end without Google: the sandwich, PKCE, single-use codes, refresh rotation and reuse-burning, audience binding, the revocation cascade, discovery metadata, DCR, that one user's session rejects another user's valid token, and that `disconnect_account` leaves no row in any table while `export_my_data` never returns the stored credential.
+
 ```bash
 node scripts/check-hardening.mjs
 ```
+
+A regression suite for the hardening fixes, where every check failed before its fix landed: SSRF address classification across 34 address forms, fetch deadlines and byte caps against a deliberately hostile server, redirect re-validation, report-path confinement, and magic-byte format gating before any image reaches the parser.
+
+### Rehearse the real sign-in locally
+
+The suites above fake Google so they can run in CI. To exercise an **actual** sign-in before deploying — the thing that catches a misconfigured OAuth client — run the flow on your own machine. Google permits `http://localhost` redirects for Web-application clients, so you can add a loopback callback to the same client that serves production:
+
+```bash
+GSC_GOOGLE_CLIENT_ID=... GSC_GOOGLE_CLIENT_SECRET=... node scripts/try-oauth-local.mjs
+```
+
+It boots OAuth mode on `http://localhost:8787` with a throwaway database and vault key in a temp directory (deleted on exit, so your deployment is untouched), self-checks that discovery, PKCE and the `401` challenge are right, then prints what to do next. Add it with `claude mcp add --transport http gsc-local http://localhost:8787/mcp` and complete the flow for real. If it works here, the only things that can still differ on the server are TLS, DNS and the reverse proxy.
 
 ### What remote mode changes
 
@@ -427,16 +474,21 @@ Tool descriptions carry explicit instructions to base analysis only on returned 
 | `GSC_ALLOWED_EMAILS` / `GSC_ALLOWED_EMAIL_DOMAINS` | No | Extra sign-in allowlist on top of Google's Testing-status test users |
 | `GSC_OAUTH_DB_FILE` | No | SQLite path (default `~/.gsc-mcp/oauth-server.db`) |
 | `GSC_VAULT_KEY_FILE` | No | Vault key path (default `~/.gsc-mcp/vault.key`, auto-created 0600) |
+| `GSC_CONTACT_EMAIL` | For verification | Contact address shown on `/privacy`. Google's reviewers expect one |
+| `GSC_REPO_URL` | No | Source link shown on `/` (defaults to this repository) |
+| `LITESTREAM_BUCKET` / `LITESTREAM_ENDPOINT` / `LITESTREAM_ACCESS_KEY_ID` / `LITESTREAM_SECRET_ACCESS_KEY` | For backups | S3-compatible target for the `backup` compose profile |
 
 ### Limits
 
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `GSC_MAX_SESSIONS` | 120 | Concurrent MCP sessions server-wide; `503` beyond it |
-| `GSC_MAX_SESSIONS_PER_USER` | 8 | Concurrent sessions one user may hold; `429` beyond it |
+| `GSC_MAX_SESSIONS_PER_USER` | 8 | Concurrent sessions one user may hold; `429` beyond it. `oauth` mode only — bearer has a single tenant |
 | `GSC_RATE_LIMIT_PER_MIN` | 60 | Requests per user per minute; `429` with `Retry-After` |
 | `GSC_MAX_TOTAL_ROWS` | 100000 | Rows one Search Analytics query may accumulate; results say when truncated |
+| `GSC_GOOGLE_TIMEOUT_MS` | 60000 | Deadline on each Google API call. googleapis sets none by default |
 | `GSC_REPORT_DIR` | cwd | Directory `generate_report` may write into; paths are confined to it |
+| `GSC_HTTP_SWEEP_INTERVAL_MS` | 60000 | How often idle sessions are reclaimed |
 
 ---
 
@@ -451,6 +503,8 @@ The anti-hallucination guardrail approach came from feedback by [Krinal Mehta](h
 ---
 
 ## Changelog
+
+**v3.4.0** — Follow-through on the v3.3.0 audit, plus the pieces a public deployment needs. **A regression in v3.3.0 is fixed:** the session caps applied the *per-user* ceiling to the whole server in bearer mode, because bearer requests carry no identity and every session's owner was therefore `null` — a single-tenant deployment stopped at 8 concurrent sessions while `/healthz` advertised 120. Bearer mode is now bounded by `GSC_MAX_SESSIONS` alone, `/healthz` reports the limits actually in force, and the HTTP suite pins all of it. **Dependencies:** eight of nine advisories cleared, and the MCP SDK moved to 1.30. The ninth, `image-size`, has no fixed release and unpatched infinite loops in its ICNS, JXL and HEIF readers; because that loop is synchronous no timeout can interrupt it, so `image_page_audit` now decides an image's format from its own magic bytes — never from an attacker-controlled `Content-Type` — and refuses to hand those families to the parser at all, reporting why instead of risking the process. **Google calls are now bounded** by `GSC_GOOGLE_TIMEOUT_MS` (googleapis sets no default, so a hung response previously held a session and a rate-limit slot indefinitely). **New public pages** at `/` and `/privacy`, served by the server itself, because Google's sensitive-scope verification requires a home page and a privacy policy on the callback's own domain; the policy is written from what the code does, and the test suite asserts the claims it makes are the ones the code keeps. The consent interstitial and both pages now carry `X-Frame-Options: DENY` and a `default-src 'none'` CSP. **Continuous backups** via an opt-in Litestream sidecar (`docker compose --profile backup up -d`), with the vault key deliberately excluded from replication so the key and the ciphertext it protects never share a bucket. **Regression tests for everything v3.3.0 shipped untested:** the session ceiling and its `503`, the rate limit and its `429`, both `Retry-After` headers, the idle sweeper, and that `disconnect_account` leaves no row in any table while `export_my_data` never returns the stored credential. And `scripts/try-oauth-local.mjs` rehearses a real Google sign-in on `http://localhost` against a throwaway database, so the flow can be proven before it is deployed. The repository no longer hardcodes the maintainer's own hostname in its templates.
 
 **v3.3.0** — Security and resource hardening, from a production-readiness audit of v3.2.0 (seven independent reviewers, every finding adversarially verified). Each fix below was reproduced before and after. The SSRF guard missed IPv4-mapped IPv6 entirely: `http://[::ffff:127.0.0.1]/` normalises to the hex form `::ffff:7f00:1`, which the dotted-decimal check never matched, so loopback and the cloud metadata endpoint were both reachable from the hosted server. Address classification now works on expanded 16-bit groups and covers mapped, compatible, translated and NAT64 forms. All fetching moved behind one helper that owns the whole request: the deadline now covers the response body (it previously ended when headers arrived, leaving downloads unbounded in time and size), bytes are capped while streaming rather than after buffering, addresses are re-validated at connect time so DNS cannot be rebound between check and connect, and every redirect hop is re-checked. `/authorize` no longer forwards straight to Google — because dynamic client registration is open to any caller, it stops at a consent page naming the requesting application and the exact host that would receive the result, warning when that host is not a Claude address. Session and rate limits (`GSC_MAX_SESSIONS`, `GSC_MAX_SESSIONS_PER_USER`, `GSC_RATE_LIMIT_PER_MIN`) stop one caller exhausting the heap: each session costs ~440 KB, so ~900 of them previously aborted the process and took every other tenant with it. Search Analytics pagination gained a row ceiling (`GSC_MAX_TOTAL_ROWS`) that reports truncation instead of accumulating without limit. `generate_report` writes only inside `GSC_REPORT_DIR` (default cwd). New `disconnect_account` and `export_my_data` tools make the deletion and access controls the documentation already described actually exist; revoking a Google grant now erases the stored credential rather than only flagging it, and unused client registrations are swept. `multi_site_dashboard` no longer throws when `GSC_SITE_URL` is unset — it was broken for exactly the multi-property configuration this fork exists to support — and its fan-out is bounded. `submit_url`/`submit_batch` refuse to run in hosted per-user mode rather than silently using the server's own credential. New regression suite: `scripts/check-hardening.mjs`.
 

@@ -1,8 +1,9 @@
-# Remote deployment for a single shared credential (Phase 2).
+# Remote deployment, for either HTTP auth mode.
 #
-# The container listens only on loopback: CloudPanel's nginx is the only thing
-# that reaches it, and it terminates TLS for gsc.k-o.pro. Nothing here opens a
-# port to the internet directly.
+# The container listens only on loopback: the host's reverse proxy is the only
+# thing that reaches it, and it terminates TLS for your domain. Nothing here
+# opens a port to the internet directly. Set GSC_HTTP_ALLOWED_HOSTS in .env to
+# your own public hostname.
 services:
   gsc-mcp:
     build: .
@@ -23,7 +24,7 @@ services:
       GSC_HTTP_PORT: "8787"
       # The public hostname must be allow-listed or proxied requests get 403,
       # because binding 0.0.0.0 disables the SDK's localhost-only host check.
-      GSC_HTTP_ALLOWED_HOSTS: "${GSC_HTTP_ALLOWED_HOSTS:-gsc.k-o.pro}"
+      GSC_HTTP_ALLOWED_HOSTS: "${GSC_HTTP_ALLOWED_HOSTS:?set your public hostname in .env}"
       # Cap V8's heap below the container limit so a huge Search Analytics
       # result fails as a JS error instead of getting the container OOM-killed.
       NODE_OPTIONS: "--max-old-space-size=384"
@@ -43,6 +44,40 @@ services:
     security_opt:
       - no-new-privileges:true
 
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  # Continuous backup of the OAuth database (users, registrations, token
+  # hashes, encrypted Google refresh tokens). Opt-in, because it needs an
+  # object-store bucket: fill the LITESTREAM_* vars in .env, then
+  #
+  #   docker compose --profile backup up -d
+  #
+  # Without the profile this service never starts and nothing else changes.
+  # Restore (with the app stopped):
+  #
+  #   docker compose --profile backup run --rm --entrypoint litestream litestream \
+  #     restore -config /etc/litestream.yml /data/.gsc-mcp/oauth-server.db
+  #
+  # The vault key is deliberately NOT replicated — see litestream.yml.
+  litestream:
+    image: litestream/litestream:0.3
+    container_name: gsc-mcp-litestream
+    restart: unless-stopped
+    profiles: ["backup"]
+    depends_on:
+      - gsc-mcp
+    command: ["replicate", "-config", "/etc/litestream.yml"]
+    env_file: .env
+    volumes:
+      - ./data:/data
+      - ./litestream.yml:/etc/litestream.yml:ro
+    mem_limit: 128m
+    security_opt:
+      - no-new-privileges:true
     logging:
       driver: json-file
       options:

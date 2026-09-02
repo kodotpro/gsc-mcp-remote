@@ -193,6 +193,56 @@ await expectThrow("cascade: refresh token dies too", () => provider.exchangeRefr
 await expectThrow("cascade: vault refuses a revoked connection", () => Promise.resolve(provider.getGoogleRefreshToken(userId)), "reconnect");
 
 // ---------------------------------------------------------------------------
+console.log("\nData deletion and export (the promises the privacy policy makes)");
+// ---------------------------------------------------------------------------
+// The README, the privacy page and the Google verification documents all state
+// that disconnecting erases the stored credential. These checks are what make
+// that a fact rather than a claim — and a false claim here is a false
+// statement to a reviewer, not just a bug.
+
+// A revoked grant must not leave the encrypted credential lying around: it has
+// no remaining purpose and real value to whoever steals the database.
+const revokedRow = db.prepare("SELECT refresh_token_enc, status FROM google_tokens WHERE user_id = ?").get(userId);
+check("a revoked grant erases the stored ciphertext", revokedRow?.refresh_token_enc === "", JSON.stringify(revokedRow));
+
+// Fresh sign-in so there is a complete record to export and then delete.
+const res4 = mockRes();
+await provider.authorize(client, { codeChallenge: challenge, redirectUri: client.redirect_uris[0], scopes: [] }, res4);
+const pid3 = (res4.html.match(/name="pending_id" value="([^"]+)"/) || [])[1];
+const state3 = new URL(provider.approvePending(pid3)).searchParams.get("state");
+const code3 = new URL(await provider.completeGoogleSignIn(state3, "good-google-code")).searchParams.get("code");
+const tokens3 = await provider.exchangeAuthorizationCode(client, code3, verifier);
+const info3 = await provider.verifyAccessToken(tokens3.access_token);
+const uid3 = info3.extra.userId;
+provider.setDefaultProperty(uid3, "sc-domain:export.example.com");
+
+const exported = provider.exportUser(uid3);
+check("export returns the user's identity", exported?.identity?.email === "user@example.com", JSON.stringify(exported?.identity));
+check("export reports the Google connection status", exported?.google_connection?.status === "active");
+check("export includes saved settings", exported?.settings?.default_property === "sc-domain:export.example.com");
+check("export counts active tokens", exported?.active_access_tokens >= 1, String(exported?.active_access_tokens));
+// The one thing an export must never hand back is the credential the vault
+// exists to protect.
+const exportedJson = JSON.stringify(exported);
+check("export never leaks the stored credential", !exportedJson.includes("refresh_token_enc") && !exportedJson.includes("google-rt-1"), exportedJson);
+
+const { deleted } = provider.disconnectUser(uid3);
+check("disconnect reports what it removed", deleted.google_credentials >= 1 && deleted.identity === 1, JSON.stringify(deleted));
+
+// Nothing may survive in ANY table.
+const leftovers = [];
+for (const [table, column] of [
+  ["users", "id"], ["google_tokens", "user_id"], ["access_tokens", "user_id"],
+  ["refresh_tokens", "user_id"], ["user_settings", "user_id"], ["auth_codes", "user_id"],
+]) {
+  const row = db.prepare(`SELECT COUNT(*) AS n FROM ${table} WHERE ${column} = ?`).get(uid3);
+  if (row.n > 0) leftovers.push(`${table}=${row.n}`);
+}
+check("disconnect leaves no row in any table", leftovers.length === 0, leftovers.join(", "));
+await expectThrow("a disconnected user's token stops working", () => provider.verifyAccessToken(tokens3.access_token));
+check("export after disconnect returns nothing", provider.exportUser(uid3) === null);
+
+// ---------------------------------------------------------------------------
 console.log("\nPart 2: HTTP server in oauth mode (Google never called)");
 // ---------------------------------------------------------------------------
 

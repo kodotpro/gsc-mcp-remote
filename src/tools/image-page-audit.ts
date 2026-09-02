@@ -76,6 +76,8 @@ interface ImageFinding {
   bytes: number | null;
   intrinsic_width: number | null;
   intrinsic_height: number | null;
+  /** Set when dimensions were skipped on purpose rather than simply absent. */
+  dimensions_unread_reason?: string;
   below_indexing_minimum: boolean | null;
   weight_status: "ok" | "heavy" | "oversized" | null;
   png_likely_photo: boolean | null;
@@ -169,6 +171,61 @@ function walkForImageObjects(node: unknown, hits: Record<string, unknown>[]): vo
 const MAX_REDIRECTS = 4;
 
 /**
+ * Formats we are willing to hand to the `image-size` parser.
+ *
+ * image-size has open advisories (GHSA-w3rx-r6r6-pgpr, GHSA-5p2g-fcmc-qvqq)
+ * for infinite loops in its ICNS, JXL and HEIF parsers, and there is no fixed
+ * release. The loop is synchronous, so no timeout can interrupt it — a single
+ * crafted image would spin the event loop forever and hang every other tenant
+ * on a hosted server. A deadline is not a defence here; not calling the
+ * vulnerable code paths is.
+ *
+ * So the format is decided from the file's own magic bytes (never from a
+ * server-supplied Content-Type, which an attacker controls) and only the
+ * container families with no outstanding advisory are parsed. AVIF and HEIC
+ * are excluded because image-size routes both through the affected HEIF
+ * reader; their dimensions come back null with a stated reason rather than
+ * risking the process.
+ */
+const DIMENSION_SAFE_FORMATS = new Set(["jpeg", "png", "gif", "webp", "bmp", "tiff", "svg"]);
+
+/** Exported for the hardening regression suite. */
+export function dimensionsAreSafeFor(format: string | null): boolean {
+  return format !== null && DIMENSION_SAFE_FORMATS.has(format);
+}
+
+/** True container format from magic bytes, or null when unrecognised. */
+export function sniffImageFormat(buf: Buffer): string | null {
+  if (buf.length < 12) return null;
+
+  if (buf[0] === 0xff && buf[1] === 0xd8 && buf[2] === 0xff) return "jpeg";
+  if (buf.subarray(0, 8).equals(Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]))) return "png";
+  if (buf.subarray(0, 6).toString("latin1") === "GIF89a" || buf.subarray(0, 6).toString("latin1") === "GIF87a") return "gif";
+  if (buf.subarray(0, 4).toString("latin1") === "RIFF" && buf.subarray(8, 12).toString("latin1") === "WEBP") return "webp";
+  if (buf[0] === 0x42 && buf[1] === 0x4d) return "bmp";
+  if (buf.subarray(0, 4).equals(Buffer.from([0x49, 0x49, 0x2a, 0x00]))) return "tiff";
+  if (buf.subarray(0, 4).equals(Buffer.from([0x4d, 0x4d, 0x00, 0x2a]))) return "tiff";
+  if (buf.subarray(0, 4).toString("latin1") === "icns") return "icns";
+  // JPEG XL: bare codestream, or the ISOBMFF-boxed form.
+  if (buf[0] === 0xff && buf[1] === 0x0a) return "jxl";
+  if (buf.subarray(0, 12).equals(Buffer.from([0x00, 0x00, 0x00, 0x0c, 0x4a, 0x58, 0x4c, 0x20, 0x0d, 0x0a, 0x87, 0x0a]))) return "jxl";
+
+  // ISOBMFF: the brand at bytes 8-12 separates AVIF/HEIC from other MP4-ish files.
+  if (buf.subarray(4, 8).toString("latin1") === "ftyp") {
+    const brand = buf.subarray(8, 12).toString("latin1");
+    if (brand.startsWith("avif") || brand.startsWith("avis")) return "avif";
+    if (brand.startsWith("heic") || brand.startsWith("heix") || brand.startsWith("hevc") || brand.startsWith("mif1")) return "heic";
+    return "isobmff";
+  }
+
+  // SVG is text; only sniff the leading non-whitespace bytes.
+  const head = buf.subarray(0, 256).toString("utf8").trimStart().toLowerCase();
+  if (head.startsWith("<svg") || (head.startsWith("<?xml") && head.includes("<svg"))) return "svg";
+
+  return null;
+}
+
+/**
  * Every fetch this tool makes goes through safeFetch, which owns the whole
  * request: one deadline covering headers AND body, a hard byte ceiling applied
  * while streaming, address validation at connect time, and per-hop redirect
@@ -210,21 +267,34 @@ async function auditImage(
   result.fetched = true;
   result.bytes = buffer.length;
   const contentType = String(response.headers["content-type"] ?? "");
-  result.format = contentType.split(";")[0].trim() || null;
+  const sniffed = sniffImageFormat(buffer);
+  // Prefer what the bytes say over what the server claims; fall back to the
+  // header only when the container is unrecognised.
+  result.format = sniffed ? `image/${sniffed}` : contentType.split(";")[0].trim() || null;
 
-  try {
-    const dims = imageSize(buffer);
-    result.intrinsic_width = dims.width ?? null;
-    result.intrinsic_height = dims.height ?? null;
-    if (dims.width && dims.height) {
-      result.below_indexing_minimum =
-        dims.width * dims.height < INDEX_MIN_AREA ||
-        dims.width < INDEX_MIN_WIDTH ||
-        dims.height < INDEX_MIN_HEIGHT;
+  if (sniffed && DIMENSION_SAFE_FORMATS.has(sniffed)) {
+    try {
+      const dims = imageSize(buffer);
+      result.intrinsic_width = dims.width ?? null;
+      result.intrinsic_height = dims.height ?? null;
+      if (dims.width && dims.height) {
+        result.below_indexing_minimum =
+          dims.width * dims.height < INDEX_MIN_AREA ||
+          dims.width < INDEX_MIN_WIDTH ||
+          dims.height < INDEX_MIN_HEIGHT;
+      }
+    } catch {
+      result.intrinsic_width = null;
+      result.intrinsic_height = null;
     }
-  } catch {
+  } else {
+    // Dimensions deliberately unread — see DIMENSION_SAFE_FORMATS. Say so in
+    // the finding so a null is never mistaken for "the image has no size".
     result.intrinsic_width = null;
     result.intrinsic_height = null;
+    result.dimensions_unread_reason = sniffed
+      ? `${sniffed} dimensions are not read: the parser has an unpatched denial-of-service advisory for this format`
+      : "dimensions are not read: the file's format could not be identified from its bytes";
   }
 
   result.weight_status =
@@ -236,7 +306,12 @@ async function auditImage(
   result.png_likely_photo =
     result.format === "image/png" && buffer.length > PNG_PHOTO_BYTES;
 
-  if (fetchMetadata) {
+  // Embedded metadata lives in JPEG/TIFF/PNG/WebP for practical purposes, and
+  // restricting the parser to formats we already identified keeps unknown
+  // containers away from a second parsing library.
+  const METADATA_FORMATS = new Set(["jpeg", "tiff", "png", "webp"]);
+
+  if (fetchMetadata && sniffed && METADATA_FORMATS.has(sniffed)) {
     try {
       const meta = await exifr.parse(buffer, {
         tiff: true,

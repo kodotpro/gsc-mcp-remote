@@ -103,6 +103,16 @@ export function getConfig() {
   return { keyFile: undefined, siteUrl: siteUrl || siteUrls[0], siteUrls };
 }
 
+/**
+ * Deadline for every Google API call.
+ *
+ * googleapis sets none by default, so a hung or very slow Google response
+ * would occupy a session — and, on a hosted server, one of that user's
+ * request-rate slots — indefinitely. A bounded failure the caller can retry is
+ * strictly better than a request that never returns.
+ */
+export const GOOGLE_TIMEOUT_MS = Number(process.env.GSC_GOOGLE_TIMEOUT_MS ?? 60_000);
+
 async function getServiceAccountClient(): Promise<searchconsole_v1.Searchconsole> {
   const { keyFile } = getConfig();
 
@@ -113,13 +123,13 @@ async function getServiceAccountClient(): Promise<searchconsole_v1.Searchconsole
     scopes: scopesForTier(getScopeTier()),
   });
 
-  google.options({ auth });
+  google.options({ auth, timeout: GOOGLE_TIMEOUT_MS });
   return google.searchconsole("v1");
 }
 
 async function getOAuthClient(): Promise<searchconsole_v1.Searchconsole> {
   const oauth2Client = await authenticateWithOAuth();
-  google.options({ auth: oauth2Client });
+  google.options({ auth: oauth2Client, timeout: GOOGLE_TIMEOUT_MS });
   return google.searchconsole("v1");
 }
 
