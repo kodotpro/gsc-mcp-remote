@@ -25,6 +25,7 @@
  * Run: node scripts/check-http.mjs
  */
 import { spawn } from "node:child_process";
+import { readFileSync } from "node:fs";
 import { formatStars, repoLink } from "../dist/web-theme.js";
 
 const TOKEN = "smoke-test-token-not-a-secret-0123456789";
@@ -218,6 +219,24 @@ try {
   // so nothing outside dist/fonts is reachable through this route.
   const strayFont = await fetch(`${BASE}/fonts/not-a-font.woff2`);
   check("an unknown font name is refused", strayFont.status === 404, `got ${strayFont.status}`);
+
+  // The same concern one layer up, and this one shipped broken: `npm run build`
+  // gained `node scripts/copy-assets.mjs`, but the Dockerfile's build stage
+  // copied only src/, so the image build died on MODULE_NOT_FOUND while every
+  // local build passed. Any path the build script runs must be COPYed before
+  // `RUN npm run build`, or the failure appears only on a deploy.
+  const dockerfile = readFileSync(new URL("../Dockerfile", import.meta.url), "utf8");
+  const buildScript = JSON.parse(readFileSync(new URL("../package.json", import.meta.url), "utf8")).scripts.build;
+  const buildStage = dockerfile.slice(0, dockerfile.indexOf("RUN npm run build"));
+  const neededDirs = [...new Set([...buildScript.matchAll(/\bnode\s+([\w.-]+)\//g)].map((m) => m[1]))];
+  check("the build script runs something from a directory", neededDirs.length > 0, buildScript);
+  for (const dir of neededDirs) {
+    check(
+      `the Dockerfile copies ${dir}/ before building`,
+      new RegExp(`^COPY\\s+${dir}\\s`, "m").test(buildStage),
+      `\`npm run build\` runs node ${dir}/… but no \`COPY ${dir}\` precedes RUN npm run build`
+    );
+  }
 
   // -- the GitHub star counter -----------------------------------------------
   // The count is polled in the background, so a render can always land before

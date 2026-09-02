@@ -7,7 +7,11 @@ WORKDIR /app
 COPY package.json package-lock.json tsconfig.json ./
 RUN npm ci
 
+# scripts/ is needed at BUILD time, not just for the test suite: `npm run
+# build` is `tsc && node scripts/copy-assets.mjs`, and the copy step is what
+# puts the web fonts into dist/. Omitting it here fails the build outright.
 COPY src ./src
+COPY scripts ./scripts
 RUN npm run build
 
 # ---- runtime --------------------------------------------------------------
