@@ -305,6 +305,28 @@ try {
   // machine can receive — so it is trusted and must NOT be warned about.
   check("loopback redirect is not warned about", !authzBody.includes("not a Claude address"));
 
+  // The consent page's whole purpose is to make one fact refusable: which
+  // client receives the result. Framing it would defeat that, so the page
+  // that most needs the anti-framing headers is pinned here, not just the
+  // public pages covered by check-http.
+  check(
+    "the consent page refuses to be framed",
+    authz.headers.get("x-frame-options") === "DENY",
+    `got ${authz.headers.get("x-frame-options")}`
+  );
+  const consentCsp = authz.headers.get("content-security-policy") ?? "";
+  check(
+    "the consent page's CSP blocks framing and scripts",
+    consentCsp.includes("frame-ancestors 'none'") && consentCsp.includes("default-src 'none'"),
+    consentCsp
+  );
+  check(
+    "the consent page can still submit its own form",
+    consentCsp.includes("form-action 'self'"),
+    consentCsp
+  );
+  check("the consent page is not cached", (authz.headers.get("cache-control") ?? "").includes("no-store"));
+
   // Now the attacker shape: an off-host https redirect must be flagged.
   const evilReg = await fetch(asMeta.registration_endpoint, {
     method: "POST",

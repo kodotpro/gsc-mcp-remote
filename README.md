@@ -317,11 +317,25 @@ A Litestream sidecar replicates it continuously to any S3-compatible bucket (Clo
 docker compose --profile backup up -d
 ```
 
-To restore, with the app stopped:
+To restore, stop the app and move any current database aside first — Litestream refuses to restore over an existing file, and `--no-deps` is what stops Compose starting the app (which would create an empty one) as a dependency:
 
 ```bash
-docker compose --profile backup run --rm --entrypoint litestream litestream restore -config /etc/litestream.yml /data/.gsc-mcp/oauth-server.db
+docker compose stop gsc-mcp
 ```
+
+```bash
+mv data/.gsc-mcp/oauth-server.db data/.gsc-mcp/oauth-server.db.old; rm -f data/.gsc-mcp/oauth-server.db-wal data/.gsc-mcp/oauth-server.db-shm
+```
+
+```bash
+docker compose --profile backup run --rm --no-deps --entrypoint litestream litestream restore -config /etc/litestream.yml /data/.gsc-mcp/oauth-server.db
+```
+
+```bash
+docker compose up -d
+```
+
+The sidecar is passed only the four `LITESTREAM_*` credentials, not the whole `.env` — it has no need of the bearer token or the Google client secret.
 
 **The vault key is deliberately not replicated.** The refresh tokens in that database are encrypted with the key at `data/.gsc-mcp/vault.key`; shipping it to the same bucket as the ciphertext would put the lock and the key in one place and defeat the encryption. Copy its 64 hex characters into a password manager instead. Keep it and a restore is complete; lose it and the restore still works — the stored Google connections are simply dead, and each user reconnects once.
 

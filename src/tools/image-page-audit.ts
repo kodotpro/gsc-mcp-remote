@@ -194,6 +194,33 @@ export function dimensionsAreSafeFor(format: string | null): boolean {
   return format !== null && DIMENSION_SAFE_FORMATS.has(format);
 }
 
+/**
+ * Real media type for a sniffed container.
+ *
+ * `format` is reported in the tool's output and read by a model, so it has to
+ * be an actual media type rather than `image/` glued to an internal label —
+ * `image/svg` and `image/isobmff` are not types that exist. `isobmff` maps to
+ * nothing useful (it is a container family, not an image format), so callers
+ * fall back to the server's own Content-Type for it.
+ */
+const SNIFFED_MEDIA_TYPE: Record<string, string> = {
+  jpeg: "image/jpeg",
+  png: "image/png",
+  gif: "image/gif",
+  webp: "image/webp",
+  bmp: "image/bmp",
+  tiff: "image/tiff",
+  svg: "image/svg+xml",
+  avif: "image/avif",
+  heic: "image/heic",
+  jxl: "image/jxl",
+  icns: "image/x-icns",
+};
+
+export function mediaTypeFor(sniffed: string | null): string | null {
+  return sniffed ? SNIFFED_MEDIA_TYPE[sniffed] ?? null : null;
+}
+
 /** True container format from magic bytes, or null when unrecognised. */
 export function sniffImageFormat(buf: Buffer): string | null {
   if (buf.length < 12) return null;
@@ -268,9 +295,11 @@ async function auditImage(
   result.bytes = buffer.length;
   const contentType = String(response.headers["content-type"] ?? "");
   const sniffed = sniffImageFormat(buffer);
-  // Prefer what the bytes say over what the server claims; fall back to the
-  // header only when the container is unrecognised.
-  result.format = sniffed ? `image/${sniffed}` : contentType.split(";")[0].trim() || null;
+  // Prefer what the bytes say over what the server claims — a server
+  // mislabelling a PNG as image/jpeg is itself worth reporting — but fall back
+  // to the header when the container maps to no specific media type.
+  result.format = mediaTypeFor(sniffed) ?? contentType.split(";")[0].trim() ?? null;
+  if (result.format === "") result.format = null;
 
   if (sniffed && DIMENSION_SAFE_FORMATS.has(sniffed)) {
     try {

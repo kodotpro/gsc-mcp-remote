@@ -14,7 +14,7 @@ import http from "node:http";
 import path from "node:path";
 import { isPrivateAddress, assertPublicUrl, safeFetch } from "../dist/net-guard.js";
 import { confineReportPath } from "../dist/tools/generate-report.js";
-import { sniffImageFormat, dimensionsAreSafeFor } from "../dist/tools/image-page-audit.js";
+import { sniffImageFormat, dimensionsAreSafeFor, mediaTypeFor } from "../dist/tools/image-page-audit.js";
 
 const failures = [];
 const check = (label, ok, detail = "") => {
@@ -169,6 +169,15 @@ check(
 );
 check("an unidentifiable file is refused rather than guessed", sniffImageFormat(pad(b(0x00, 0x01, 0x02, 0x03))) === null);
 check("a truncated file is refused", sniffImageFormat(b(0xff, 0xd8)) === null);
+
+// `format` is reported in the tool output and read by a model, so it must be
+// a real media type — not the internal sniff label glued onto "image/".
+const MEDIA_TYPES = [["svg", "image/svg+xml"], ["icns", "image/x-icns"], ["jpeg", "image/jpeg"], ["tiff", "image/tiff"]];
+const badTypes = MEDIA_TYPES.filter(([k, want]) => mediaTypeFor(k) !== want).map(([k]) => `${k}->${mediaTypeFor(k)}`);
+check("sniffed formats map to real media types", badTypes.length === 0, badTypes.join(", "));
+// isobmff is a container family, not an image type: it must map to nothing so
+// the caller falls back to the server's Content-Type.
+check("a container family maps to no media type", mediaTypeFor("isobmff") === null, String(mediaTypeFor("isobmff")));
 
 if (failures.length > 0) {
   console.error(`\nHardening tests: ${failures.length} failure(s).`);
