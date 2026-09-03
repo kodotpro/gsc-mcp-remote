@@ -7,11 +7,13 @@
  * design leans on what survives those limits: inline CSS, self-hosted fonts,
  * inline SVG, and `prefers-color-scheme` instead of a scripted theme toggle.
  *
- * Tokens are copied from k-o.pro's globals.css rather than approximated, so
- * the two sites stay recognisably the same product. Where the original relies
- * on machinery that cannot come along — Tailwind, the `[data-theme]` attribute
- * a script sets, the SVG lens filter behind `.glass` — this uses the fallback
- * that design system already sanctions (see the notes at each site).
+ * Layout, type and the container/breakpoint system are copied from k-o.pro's
+ * globals.css rather than approximated, so the two sites stay recognisably the
+ * same product. Color is the deliberate exception — see the note above TOKENS.
+ * Where the original relies on machinery that cannot come along — Tailwind,
+ * the `[data-theme]` attribute a script sets, the SVG lens filter behind
+ * `.glass` — this uses the fallback that design system already sanctions (see
+ * the notes at each site).
  */
 
 /** Public paths of the self-hosted fonts, served by http.ts from dist/fonts. */
@@ -57,18 +59,36 @@ const FONT_FACES = `
 `;
 
 /**
- * k-o.pro's palette. The site switches on a `[data-theme]` attribute written by
- * a script; with no JavaScript available here the same values hang off
- * `prefers-color-scheme` instead, which costs the manual toggle and nothing else.
+ * Colors are Google's own Material palette — the same tokens Search Console's
+ * UI itself runs on — rather than k-o.pro's indigo. This is the one place this
+ * file deliberately diverges from k-o.pro: this subdomain sits next to the
+ * product it wraps, so it borrows that product's color language instead.
+ * Layout, type and the glass material are unchanged and still k-o.pro's.
+ *
+ * G Blue 600 (#1a73e8) is the accent used for links, selected states and
+ * primary actions across Search Console, Gmail, Cloud Console and the rest of
+ * Google's product surface; G Grey 900/700/300 (#202124/#5f6368/#dadce0) are
+ * the text and border grays in the same family. Values are plain hex rather
+ * than hand-converted to oklch, so there is no risk of a conversion error
+ * shifting them off the real color.
+ *
+ * Search Console itself has no public dark theme to copy, so dark mode below
+ * uses Google's own standard dark-surface palette instead — the one Cloud
+ * Console and other Google products switch to — rather than a literal GSC
+ * screenshot match.
+ *
+ * The site switches on a `[data-theme]` attribute written by a script; with no
+ * JavaScript available here the same values hang off `prefers-color-scheme`
+ * instead, which costs the manual toggle and nothing else.
  */
 const TOKENS = `
 :root{
- --background:oklch(100% 0 0deg); --foreground:oklch(14.5% 0 0deg);
- --card:oklch(96.5% 0.005 265deg); --muted-foreground:oklch(55.6% 0 0deg);
- --border:oklch(92.2% 0 0deg);
- --brand:oklch(48% 0.17 255deg); --brand-surface:oklch(97.5% 0.01 255deg);
- --brand-mid:oklch(86% 0.05 255deg);
- --footer:oklch(20% 0.04 255deg); --footer-foreground:oklch(100% 0 0deg);
+ --background:#ffffff; --foreground:#202124;
+ --card:#f8f9fa; --muted-foreground:#5f6368;
+ --border:#dadce0;
+ --brand:#1a73e8; --brand-surface:#e8f0fe;
+ --brand-mid:#aecbfa;
+ --footer:#202124; --footer-foreground:#ffffff;
  --radius:1.125rem;
  --grid-line:oklch(0% 0 0deg / 0.045);
  --glass-tint:45%; --glass-hi:48%; --glass-hi2:22%; --glass-hi3:10%;
@@ -79,11 +99,12 @@ const TOKENS = `
 }
 @media (prefers-color-scheme:dark){
  :root{
-  --background:oklch(14.5% 0 0deg); --foreground:oklch(98.5% 0 0deg);
-  --card:oklch(17% 0 0deg); --muted-foreground:oklch(70.8% 0 0deg);
-  --border:oklch(26.9% 0 0deg);
-  --brand:oklch(62% 0.16 255deg); --brand-surface:oklch(19% 0.02 255deg);
-  --brand-mid:oklch(35% 0.1 255deg);
+  --background:#202124; --foreground:#e8eaed;
+  --card:#292a2d; --muted-foreground:#9aa0a6;
+  --border:#3c4043;
+  --brand:#8ab4f8; --brand-surface:#28313f;
+  --brand-mid:#4285f4;
+  --footer:#17181a; --footer-foreground:#ffffff;
   --grid-line:oklch(100% 0 0deg / 0.055);
   --glass-tint:42%; --glass-hi:24%; --glass-hi2:12%; --glass-hi3:20%;
   color-scheme:dark;
@@ -159,7 +180,10 @@ const HERO = `
 /* The hero's own bottom padding is the spacing; a trailing element's margin
    would stack on top of it. */
 .hero-inner > :last-child{margin-bottom:0}
-.page-body{padding-block:2.75rem 1rem}
+/* Wider than the old fixed 46rem, but capped well short of .wrap's 86rem —
+   tool tables and paragraphs get more room without the two-column tables
+   turning sparse or lines running past a readable measure. */
+.page-body{padding-block:2.75rem 1rem;max-width:56rem}
 .page-body > h2:first-child{margin-top:0}
 /* Reaches above the hero's own box so the grid and glow run unbroken behind
    the header, which sits in front of it on z-index. Two things depend on that:
@@ -194,8 +218,16 @@ body{margin:0;background:var(--background);color:var(--foreground);
  font-family:var(--font-sans);font-size:1rem;line-height:1.65;
  font-synthesis-weight:none;-webkit-font-smoothing:antialiased;
  display:flex;flex-direction:column;min-height:100vh}
-.wrap{width:100%;max-width:46rem;margin-inline:auto;padding-inline:1rem}
-@media (width >= 48rem){.wrap{padding-inline:2rem}}
+/* Matches k-o.pro's own .container utility step for step (same breakpoints,
+   same max-widths, same padding), so the header pill and hero read as the
+   same site rather than a narrower cousin of it. Long-form content overrides
+   this back down for readability — see .page-body below. */
+.wrap{width:100%;max-width:40rem;margin-inline:auto;padding-inline:1rem}
+@media (width >= 40rem){.wrap{max-width:40rem}}
+@media (width >= 48rem){.wrap{max-width:48rem;padding-inline:2rem}}
+@media (width >= 64rem){.wrap{max-width:64rem}}
+@media (width >= 80rem){.wrap{max-width:80rem}}
+@media (width >= 86rem){.wrap{max-width:86rem}}
 main{flex:1}
 h1,h2,h3{line-height:1.15;margin:0;text-wrap:balance}
 h1{font-family:var(--font-display);font-weight:400;letter-spacing:-.01em;
@@ -209,6 +241,11 @@ li{margin-bottom:.5rem}
 a{color:inherit;text-underline-offset:.18em;
  text-decoration-color:color-mix(in oklch,currentColor 40%,transparent)}
 a:hover{text-decoration-color:currentColor}
+/* Google's own convention: content links are blue, chrome stays neutral —
+   the same split as Search Console's sidebar, where every item is gray except
+   the active one. Scoped to <main> so header/footer nav (logo, GH pill, the
+   footer link list) stay neutral chrome rather than turning into link-blue. */
+main a{color:var(--brand)}
 strong{font-weight:700}
 code{font-family:var(--font-mono);font-size:.875em;
  background:color-mix(in oklch,var(--foreground) 7%,transparent);
