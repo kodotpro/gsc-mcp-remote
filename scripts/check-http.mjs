@@ -191,7 +191,11 @@ try {
     .slice(1);
   check(
     "CSP permits the consent form to reach Google",
-    formAction.includes("'self'") && formAction.includes("https://accounts.google.com"),
+    // === rather than .includes(): formAction is already split into source
+    // expressions, so this is an exact match either way, but comparing
+    // explicitly says so to both the reader and the scanner.
+    formAction.some((src) => src === "'self'") &&
+      formAction.some((src) => src === "https://accounts.google.com"),
     `form-action sources: ${JSON.stringify(formAction)}`
   );
 
