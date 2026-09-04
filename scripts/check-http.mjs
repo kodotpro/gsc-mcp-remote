@@ -181,10 +181,18 @@ try {
   // form was completely broken. The form posts to this origin, but that route
   // answers 302 to accounts.google.com, and browsers apply form-action across
   // the whole navigation — so 'self' alone silently aborted the submission.
+  // Parse form-action into its source expressions rather than substring-matching
+  // the header: "https://accounts.google.com.evil.com" contains the string we
+  // want but is a different origin. This test guards the CSP whose earlier,
+  // stricter form silently aborted the consent POST, so it should be exact.
+  const formAction = (csp.split(";").find((d) => d.trim().startsWith("form-action")) ?? "")
+    .trim()
+    .split(/\s+/)
+    .slice(1);
   check(
     "CSP permits the consent form to reach Google",
-    /form-action[^;]*'self'/.test(csp) && csp.includes("https://accounts.google.com"),
-    csp
+    formAction.includes("'self'") && formAction.includes("https://accounts.google.com"),
+    `form-action sources: ${JSON.stringify(formAction)}`
   );
 
   const privacy = await fetch(`${BASE}/privacy`);
@@ -261,7 +269,11 @@ try {
   const REPO = "https://github.com/kodotpro/gsc-mcp-remote";
   const unknown = repoLink(REPO, undefined);
   check("an unknown star count renders no counter", !unknown.includes("gh-stars"), unknown);
-  check("an unknown star count still renders the link", unknown.includes(REPO));
+  check(
+    "an unknown star count still renders the link",
+    unknown.includes(`href="${REPO}"`),
+    unknown
+  );
   check("a known star count renders the counter", repoLink(REPO, 42).includes("gh-stars"));
   check(
     "star counts are abbreviated the way GitHub abbreviates them",
