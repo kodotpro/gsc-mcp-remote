@@ -39,6 +39,10 @@ Modifications in this fork (see README for detail):
     pages, magic-byte format gating before image parsing, and continuous
     replication of the token database.
 
+  - Replaced the image-size dependency with a first-party header parser
+    (src/image-dimensions.ts), removing two unpatched denial-of-service
+    advisories; no unbounded loops, and dispatch is on the file's own magic
+    bytes rather than a server-supplied Content-Type.
 This fork is not affiliated with or endorsed by the original author.
 
 ---

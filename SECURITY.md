@@ -84,8 +84,9 @@ failure rather than a surprise:
   link-local, CGNAT, reserved, IPv4-mapped/compatible/translated or NAT64
   addresses; the address is re-validated at connect time, and every redirect hop
   re-checked
-- Fetches are bounded in both time and bytes, and image bytes are format-gated
-  by magic number before any parser sees them
+- Fetches are bounded in both time and bytes; image dimensions are read by a
+  first-party parser with no unbounded loops, dispatched on the format the
+  file's own magic bytes declare rather than a server-supplied Content-Type
 - Per-user mode requests only `webmasters.readonly`, and the write tools refuse
   to run in it
 
@@ -100,8 +101,8 @@ failure rather than a surprise:
 - **Prefer `readonly`** for any shared or hosted deployment.
 - **Set `GSC_HTTP_ALLOWED_HOSTS`.** Binding `0.0.0.0` disables the SDK's
   localhost-only host check, so the public hostname must be listed explicitly.
-- **One known accepted advisory:** `image-size` has no fixed release for its
-  ICNS/JXL/HEIF infinite loops. Because that loop is synchronous, no timeout can
-  interrupt it, so the affected formats are identified by magic bytes and never
-  passed to the parser. CI gates on `critical` rather than `high` for this
-  reason; see the workflow comment.
+- **No accepted advisories.** The tree is clean, and CI fails the build on any
+  new `high`. The one advisory previously carried here — `image-size`'s
+  unpatched ICNS/JXL/HEIF infinite loops (CVE-2025-71330, CVE-2025-71329) — was
+  removed by dropping the dependency: `src/image-dimensions.ts` reads the two
+  numbers we needed from the image header itself, with no unbounded loops.

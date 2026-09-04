@@ -6,6 +6,12 @@ on:
   pull_request:
   workflow_dispatch:
 
+# The GITHUB_TOKEN needs nothing but source access: every step reads the repo,
+# builds it, and runs the credential-free suites. Declared explicitly so the job
+# does not silently gain write scope if the repository default is ever changed.
+permissions:
+  contents: read
+
 jobs:
   build:
     runs-on: ubuntu-latest
@@ -47,10 +53,9 @@ jobs:
       - name: Hardening regression tests
         run: node scripts/check-hardening.mjs
 
-      # Catches NEW advisories in the dependency tree. The gate is `critical`
-      # rather than `high` because one high is knowingly carried: image-size
-      # has no fixed release, and it is mitigated in code by refusing to hand
-      # the affected formats (ICNS/JXL/HEIF) to the parser at all — which
-      # scripts/check-hardening.mjs asserts.
+      # The tree carries no accepted advisories, so this gates at `high`.
+      # It used to sit at `critical` for image-size, which had no fixed release;
+      # that dependency is gone — dimensions are read by src/image-dimensions.ts,
+      # whose termination scripts/check-hardening.mjs asserts.
       - name: Dependency advisories
-        run: npm audit --omit=dev --audit-level=critical
+        run: npm audit --omit=dev --audit-level=high

@@ -58,7 +58,7 @@ const SITE_URL_PARAM = z
     "Defaults to the configured property. Call list_properties to see what this account can access."
   );
 
-export const SERVER_VERSION = "3.5.0";
+export const SERVER_VERSION = "3.6.0";
 
 export function createServer(): McpServer {
   const server = new McpServer({

@@ -15,6 +15,7 @@ import path from "node:path";
 import { isPrivateAddress, assertPublicUrl, safeFetch } from "../dist/net-guard.js";
 import { confineReportPath } from "../dist/tools/generate-report.js";
 import { sniffImageFormat, dimensionsAreSafeFor, mediaTypeFor } from "../dist/tools/image-page-audit.js";
+import { imageDimensions } from "../dist/image-dimensions.js";
 
 const failures = [];
 const check = (label, ok, detail = "") => {
@@ -125,13 +126,16 @@ check(`${escapes.length} traversal attempts all confined`, escaped.length === 0,
 check("a plain filename is preserved", path.basename(confineReportPath("weekly.md", "2026-01-01")) === "weekly.md");
 
 // ---------------------------------------------------------------------------
-console.log("\nImage parser exposure");
+console.log("\nImage dimension parsing");
 // ---------------------------------------------------------------------------
-// image-size has unfixed advisories for infinite loops in its ICNS, JXL and
-// HEIF readers (GHSA-w3rx-r6r6-pgpr, GHSA-5p2g-fcmc-qvqq). The loop is
-// synchronous, so a timeout cannot interrupt it: one crafted image would spin
-// the event loop and hang every tenant. The defence is to decide the format
-// from the file's own magic bytes and never hand those families to the parser.
+// The image-size package carried two unpatched advisories — CVE-2025-71330
+// (ICNS) and CVE-2025-71329 (JXL/HEIF) — where a zero-valued length or box-size
+// field left a loop's offset unadvanced, spinning the event loop forever. That
+// loop is synchronous, so no timeout can interrupt it, and one crafted image
+// served to image_page_audit would hang every tenant. The dependency is gone;
+// src/image-dimensions.ts reads the headers itself. These checks pin BOTH
+// halves of that: the format is still decided from magic bytes, and the reader
+// terminates on every hostile shape the advisories describe.
 const b = (...bytes) => Buffer.from(bytes);
 const pad = (buf) => Buffer.concat([buf, Buffer.alloc(Math.max(0, 32 - buf.length))]);
 
@@ -189,6 +193,98 @@ console.log("\nRow ceiling");
 const { MAX_TOTAL_ROWS } = await import("../dist/analytics.js");
 check("the row ceiling defaults to a memory-safe value", MAX_TOTAL_ROWS === 25000, String(MAX_TOTAL_ROWS));
 check("the row ceiling is overridable", Number(process.env.GSC_MAX_TOTAL_ROWS ?? 25000) === 25000);
+
+// ---------------------------------------------------------------------------
+console.log("\nDimension reader: correctness");
+// ---------------------------------------------------------------------------
+// A safe parser that returns wrong numbers is no better than a hanging one:
+// intrinsic size drives the "below Google's indexing minimum" finding.
+const be16v = (n) => { const b = Buffer.alloc(2); b.writeUInt16BE(n); return b; };
+const be32v = (n) => { const b = Buffer.alloc(4); b.writeUInt32BE(n); return b; };
+const le16v = (n) => { const b = Buffer.alloc(2); b.writeUInt16LE(n); return b; };
+const le32v = (n) => { const b = Buffer.alloc(4); b.writeUInt32LE(n); return b; };
+const W = 1280, H = 720;
+
+const tiffOf = (le) => {
+  const t = Buffer.alloc(38);
+  if (le) {
+    t.write("II", 0); t.writeUInt16LE(42, 2); t.writeUInt32LE(8, 4); t.writeUInt16LE(2, 8);
+    t.writeUInt16LE(0x100, 10); t.writeUInt16LE(4, 12); t.writeUInt32LE(1, 14); t.writeUInt32LE(W, 18);
+    t.writeUInt16LE(0x101, 22); t.writeUInt16LE(4, 24); t.writeUInt32LE(1, 26); t.writeUInt32LE(H, 30);
+  } else {
+    t.write("MM", 0); t.writeUInt16BE(42, 2); t.writeUInt32BE(8, 4); t.writeUInt16BE(2, 8);
+    t.writeUInt16BE(0x100, 10); t.writeUInt16BE(4, 12); t.writeUInt32BE(1, 14); t.writeUInt32BE(W, 18);
+    t.writeUInt16BE(0x101, 22); t.writeUInt16BE(4, 24); t.writeUInt32BE(1, 26); t.writeUInt32BE(H, 30);
+  }
+  return t;
+};
+const vp8xOf = () => {
+  const v = Buffer.alloc(40);
+  Buffer.from("RIFF").copy(v, 0); le32v(100).copy(v, 4);
+  Buffer.from("WEBP").copy(v, 8); Buffer.from("VP8X").copy(v, 12); le32v(10).copy(v, 16);
+  v[24] = (W - 1) & 255; v[25] = ((W - 1) >> 8) & 255; v[26] = ((W - 1) >> 16) & 255;
+  v[27] = (H - 1) & 255; v[28] = ((H - 1) >> 8) & 255; v[29] = ((H - 1) >> 16) & 255;
+  return v;
+};
+const bmpTopDown = () => {
+  const x = Buffer.concat([Buffer.from("BM"), le32v(1000), Buffer.alloc(4), le32v(54), le32v(40), le32v(W), Buffer.alloc(4), Buffer.alloc(8)]);
+  x.writeInt32LE(-H, 22);
+  return x;
+};
+
+const DIMS = [
+  ["png", "png", Buffer.concat([Buffer.from([0x89,0x50,0x4e,0x47,0x0d,0x0a,0x1a,0x0a]), be32v(13), Buffer.from("IHDR"), be32v(W), be32v(H), Buffer.alloc(8)])],
+  ["gif", "gif", Buffer.concat([Buffer.from("GIF89a"), le16v(W), le16v(H), Buffer.alloc(4)])],
+  ["bmp", "bmp", Buffer.concat([Buffer.from("BM"), le32v(1000), Buffer.alloc(4), le32v(54), le32v(40), le32v(W), le32v(H), Buffer.alloc(8)])],
+  ["bmp top-down", "bmp", bmpTopDown()],
+  ["jpeg", "jpeg", Buffer.concat([Buffer.from([0xff,0xd8]), Buffer.from([0xff,0xe0]), be16v(16), Buffer.alloc(14), Buffer.from([0xff,0xc0]), be16v(17), Buffer.from([8]), be16v(H), be16v(W), Buffer.alloc(8)])],
+  ["webp VP8", "webp", Buffer.concat([Buffer.from("RIFF"), le32v(100), Buffer.from("WEBP"), Buffer.from("VP8 "), le32v(50), Buffer.alloc(3), Buffer.from([0x9d,0x01,0x2a]), le16v(W), le16v(H), Buffer.alloc(8)])],
+  ["webp VP8L", "webp", Buffer.concat([Buffer.from("RIFF"), le32v(100), Buffer.from("WEBP"), Buffer.from("VP8L"), le32v(50), Buffer.from([0x2f]), le32v((W-1)|((H-1)<<14)), Buffer.alloc(12)])],
+  ["webp VP8X", "webp", vp8xOf()],
+  ["tiff LE", "tiff", tiffOf(true)],
+  ["tiff BE", "tiff", tiffOf(false)],
+  ["svg attrs", "svg", Buffer.from(`<svg width="${W}" height="${H}"/>`)],
+  ["svg viewBox", "svg", Buffer.from(`<svg viewBox="0 0 ${W} ${H}"/>`)],
+];
+const wrongDims = DIMS.filter(([, fmt, buf]) => {
+  const d = imageDimensions(buf, fmt);
+  return !d || d.width !== W || d.height !== H;
+}).map(([label]) => label);
+check(`${DIMS.length} formats measured correctly (${W}x${H})`, wrongDims.length === 0, wrongDims.join(", "));
+
+// ---------------------------------------------------------------------------
+console.log("\nDimension reader: termination on hostile input");
+// ---------------------------------------------------------------------------
+// Each of these is a zero-advance shape, an out-of-bounds claim, or an
+// oversized document. The reader must return null promptly; a hang here is the
+// exact defect that removing image-size was meant to eliminate. If this check
+// ever stops completing, that is the regression.
+const HOSTILE = [
+  ["jpeg segment length 0", "jpeg", Buffer.concat([Buffer.from([0xff,0xd8]), Buffer.from([0xff,0xe1]), be16v(0), Buffer.alloc(64)])],
+  ["jpeg segment length 1", "jpeg", Buffer.concat([Buffer.from([0xff,0xd8]), Buffer.from([0xff,0xe1]), be16v(1), Buffer.alloc(64)])],
+  ["jpeg 5000 zero segments", "jpeg", Buffer.concat([Buffer.from([0xff,0xd8]), ...Array.from({length:5000}, () => Buffer.concat([Buffer.from([0xff,0xe1]), be16v(0)]))])],
+  ["tiff 65535 entries claimed", "tiff", (() => { const b = Buffer.alloc(64); b.write("II",0); b.writeUInt16LE(42,2); b.writeUInt32LE(8,4); b.writeUInt16LE(65535,8); return b; })()],
+  ["tiff IFD offset out of bounds", "tiff", (() => { const b = Buffer.alloc(32); b.write("II",0); b.writeUInt16LE(42,2); b.writeUInt32LE(0xfffffff0,4); return b; })()],
+  ["svg 2MB of attributes", "svg", Buffer.from("<svg " + 'a="1" '.repeat(300000) + ">")],
+  ["svg unterminated tag", "svg", Buffer.from('<svg width="10' + "0".repeat(200000))],
+  ["empty buffer", "png", Buffer.alloc(0)],
+  ["single byte", "jpeg", Buffer.from([0xff])],
+  ["4KB of noise", "webp", Buffer.alloc(4096, 0xab)],
+  ["all zeros", "bmp", Buffer.alloc(1024)],
+  ["unsupported format", "icns", Buffer.alloc(64)],
+  ["null format", null, Buffer.alloc(64)],
+];
+const started = process.hrtime.bigint();
+const misbehaved = HOSTILE.filter(([, fmt, buf]) => {
+  try {
+    return imageDimensions(buf, fmt) !== null;
+  } catch {
+    return true; // throwing counts as misbehaving; callers expect null
+  }
+}).map(([label]) => label);
+const elapsedMs = Number(process.hrtime.bigint() - started) / 1e6;
+check(`${HOSTILE.length} hostile inputs all return null without throwing`, misbehaved.length === 0, misbehaved.join(", "));
+check(`hostile input handled promptly (${elapsedMs.toFixed(1)}ms, budget 2000ms)`, elapsedMs < 2000, `${elapsedMs}ms`);
 
 if (failures.length > 0) {
   console.error(`\nHardening tests: ${failures.length} failure(s).`);

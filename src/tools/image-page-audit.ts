@@ -1,5 +1,5 @@
 import { parse, type HTMLElement } from "node-html-parser";
-import { imageSize } from "image-size";
+import { imageDimensions, MEASURABLE_FORMATS } from "../image-dimensions.js";
 import exifr from "exifr";
 import { isRemoteMode } from "../runtime.js";
 import { safeFetch, BlockedUrlError } from "../net-guard.js";
@@ -171,23 +171,21 @@ function walkForImageObjects(node: unknown, hits: Record<string, unknown>[]): vo
 const MAX_REDIRECTS = 4;
 
 /**
- * Formats we are willing to hand to the `image-size` parser.
+ * Formats whose dimensions we can read.
  *
- * image-size has open advisories (GHSA-w3rx-r6r6-pgpr, GHSA-5p2g-fcmc-qvqq)
- * for infinite loops in its ICNS, JXL and HEIF parsers, and there is no fixed
- * release. The loop is synchronous, so no timeout can interrupt it — a single
- * crafted image would spin the event loop forever and hang every other tenant
- * on a hosted server. A deadline is not a defence here; not calling the
- * vulnerable code paths is.
+ * This used to be an allow-list protecting the `image-size` package from the
+ * formats its unpatched advisories concerned. That package is gone: dimensions
+ * are now read by ../image-dimensions.ts, which has no unbounded loops and
+ * covers exactly these families. The set derives from that module so the two
+ * cannot drift apart.
  *
- * So the format is decided from the file's own magic bytes (never from a
- * server-supplied Content-Type, which an attacker controls) and only the
- * container families with no outstanding advisory are parsed. AVIF and HEIC
- * are excluded because image-size routes both through the affected HEIF
- * reader; their dimensions come back null with a stated reason rather than
- * risking the process.
+ * The format is still decided from the file's own magic bytes, never from a
+ * server-supplied Content-Type, because a server that mislabels its images is
+ * itself a finding — and because trusting the header would let a caller pick
+ * which parser runs. ICNS, JXL, HEIC and AVIF are simply not measured; their
+ * dimensions come back null with a stated reason.
  */
-const DIMENSION_SAFE_FORMATS = new Set(["jpeg", "png", "gif", "webp", "bmp", "tiff", "svg"]);
+const DIMENSION_SAFE_FORMATS = new Set(MEASURABLE_FORMATS);
 
 /** Exported for the hardening regression suite. */
 export function dimensionsAreSafeFor(format: string | null): boolean {
@@ -302,19 +300,14 @@ async function auditImage(
   if (result.format === "") result.format = null;
 
   if (sniffed && DIMENSION_SAFE_FORMATS.has(sniffed)) {
-    try {
-      const dims = imageSize(buffer);
-      result.intrinsic_width = dims.width ?? null;
-      result.intrinsic_height = dims.height ?? null;
-      if (dims.width && dims.height) {
-        result.below_indexing_minimum =
-          dims.width * dims.height < INDEX_MIN_AREA ||
-          dims.width < INDEX_MIN_WIDTH ||
-          dims.height < INDEX_MIN_HEIGHT;
-      }
-    } catch {
-      result.intrinsic_width = null;
-      result.intrinsic_height = null;
+    const dims = imageDimensions(buffer, sniffed);
+    result.intrinsic_width = dims?.width ?? null;
+    result.intrinsic_height = dims?.height ?? null;
+    if (dims) {
+      result.below_indexing_minimum =
+        dims.width * dims.height < INDEX_MIN_AREA ||
+        dims.width < INDEX_MIN_WIDTH ||
+        dims.height < INDEX_MIN_HEIGHT;
     }
   } else {
     // Dimensions deliberately unread — see DIMENSION_SAFE_FORMATS. Say so in
