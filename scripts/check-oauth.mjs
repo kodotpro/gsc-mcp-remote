@@ -99,6 +99,12 @@ const mockRes = () => {
   return r;
 };
 
+/** The flow cookie's value, as the browser that received /authorize would hold it. */
+const flowToken = (res) => {
+  const raw = res.headers["set-cookie"] ?? "";
+  return (raw.match(/gsc_auth_flow=([^;]+)/) || [])[1];
+};
+
 // authorize() must NOT go straight to Google: it renders a consent page that
 // names the client and where the code would be delivered. This is the gate
 // that stops an attacker-registered client from silently harvesting a code.
@@ -125,24 +131,74 @@ const res2 = mockRes();
 await provider.authorize(evil, { codeChallenge: challenge, redirectUri: evil.redirect_uris[0], scopes: [] }, res2);
 check("untrusted redirect host is warned about", res2.html.includes("not a Claude address") && res2.html.includes("attacker.example"));
 const evilPid = (res2.html.match(/name="pending_id" value="([^"]+)"/) || [])[1];
+const evilToken = flowToken(res2);
 provider.denyPending(evilPid);
-await expectThrow("denied request cannot be approved afterwards", () => Promise.resolve(provider.approvePending(evilPid)), "expired");
+await expectThrow("denied request cannot be approved afterwards", () => Promise.resolve(provider.approvePending(evilPid, evilToken)), "expired");
 
-// Approving returns the Google URL and keeps the parked request alive.
-const googleRedirect = provider.approvePending(pid);
-check("approving sends the person to Google", googleRedirect.startsWith("https://accounts.google.com/"));
+// ---------------------------------------------------------------------------
+// Browser binding. These assertions replace one that USED to read
+// `check("Google link carries the pending id as state", state === pid)` — i.e.
+// the suite asserted the vulnerable design was correct, and passed while a
+// victim's Google account could be bound to an attacker's client. The shape to
+// assert is that the ATTACK FAILS, not that a mechanism has a given form.
+// ---------------------------------------------------------------------------
+
+// /authorize must hand the browser a flow cookie; it is the only value an
+// attacker cannot obtain by starting their own flow.
+const token1 = flowToken(res1);
+check("authorize sets a flow cookie", Boolean(token1 && token1.length > 30), String(res1.headers["set-cookie"]));
+const cookieAttrs = String(res1.headers["set-cookie"] ?? "");
+check("flow cookie is HttpOnly", /HttpOnly/i.test(cookieAttrs));
+check("flow cookie is SameSite=Lax (blocks cross-site POST, allows Google's GET return)", /SameSite=Lax/i.test(cookieAttrs));
+check("flow cookie is scoped to /oauth, not the whole origin", /Path=\/oauth/.test(cookieAttrs));
+
+// ATTACK 1 — consent CSRF: an attacker mints a pending id, then makes a
+// victim's browser POST it. The victim's browser has no cookie for that flow.
+await expectThrow(
+  "ATTACK consent CSRF: approving without the flow cookie is refused",
+  () => Promise.resolve(provider.approvePending(pid, undefined)),
+  "did not come from the browser"
+);
+await expectThrow(
+  "ATTACK consent CSRF: approving with another flow's cookie is refused",
+  () => Promise.resolve(provider.approvePending(pid, "not-the-right-token")),
+  "did not come from the browser"
+);
+
+// The legitimate path still works, with the cookie the same browser holds.
+const googleRedirect = provider.approvePending(pid, token1);
+check("approving with the flow cookie sends the person to Google", googleRedirect.startsWith("https://accounts.google.com/"));
 const state = new URL(googleRedirect).searchParams.get("state");
-check("Google link carries the pending id as state", state === pid);
 
-// Google callback completes the sandwich
-const backToClient = await provider.completeGoogleSignIn(state, "good-google-code");
+// The state must NOT be the pending id: when it was, holding the id was enough
+// to complete someone else's Google leg.
+check("Google state is independent of the pending id", Boolean(state) && state !== pid, `state=${state} pid=${pid}`);
+check("Google state is unguessable", Boolean(state && state.length > 30));
+
+// ATTACK 2 — the confused deputy. The attacker approves consent in their OWN
+// browser and mails the victim the resulting accounts.google.com link. The
+// victim completes Google sign-in, so the callback arrives with a valid state
+// and a valid Google code — but from a browser holding no cookie for it.
+await expectThrow(
+  "ATTACK confused deputy: callback without the flow cookie is refused",
+  () => provider.completeGoogleSignIn(state, "good-google-code", undefined),
+  "started in a different browser"
+);
+await expectThrow(
+  "ATTACK confused deputy: callback from a different browser is refused",
+  () => provider.completeGoogleSignIn(state, "good-google-code", "some-other-browsers-token"),
+  "started in a different browser"
+);
+
+// Google callback completes the sandwich — only for the browser that started it.
+const backToClient = await provider.completeGoogleSignIn(state, "good-google-code", token1);
 const back = new URL(backToClient);
 check("callback returns to the client's redirect_uri", back.origin + back.pathname === client.redirect_uris[0]);
 check("client's own state is echoed", back.searchParams.get("state") === "client-state-xyz");
 const code = back.searchParams.get("code");
 check("a one-time code is issued", Boolean(code && code.startsWith("mcp_code_")));
 
-await expectThrow("state is single-use", () => provider.completeGoogleSignIn(state, "good-google-code"), "expired or was already used");
+await expectThrow("state is single-use", () => provider.completeGoogleSignIn(state, "good-google-code", token1), "expired or was already used");
 
 // The SDK's token handler does exactly this: fetch challenge, verify, exchange.
 const storedChallenge = await provider.challengeForAuthorizationCode(client, code);
@@ -177,8 +233,9 @@ await expectThrow("reuse burned the new access token too", () => provider.verify
 const res3 = mockRes();
 await provider.authorize(client, { codeChallenge: challenge, redirectUri: client.redirect_uris[0], scopes: [] }, res3);
 const pid2 = (res3.html.match(/name="pending_id" value="([^"]+)"/) || [])[1];
-const state2 = new URL(provider.approvePending(pid2)).searchParams.get("state");
-const code2 = new URL(await provider.completeGoogleSignIn(state2, "good-google-code")).searchParams.get("code");
+const token2 = flowToken(res3);
+const state2 = new URL(provider.approvePending(pid2, token2)).searchParams.get("state");
+const code2 = new URL(await provider.completeGoogleSignIn(state2, "good-google-code", token2)).searchParams.get("code");
 const tokens2 = await provider.exchangeAuthorizationCode(client, code2, verifier);
 const info2 = await provider.verifyAccessToken(tokens2.access_token);
 const userId = info2.extra.userId;
@@ -209,8 +266,9 @@ check("a revoked grant erases the stored ciphertext", revokedRow?.refresh_token_
 const res4 = mockRes();
 await provider.authorize(client, { codeChallenge: challenge, redirectUri: client.redirect_uris[0], scopes: [] }, res4);
 const pid3 = (res4.html.match(/name="pending_id" value="([^"]+)"/) || [])[1];
-const state3 = new URL(provider.approvePending(pid3)).searchParams.get("state");
-const code3 = new URL(await provider.completeGoogleSignIn(state3, "good-google-code")).searchParams.get("code");
+const token3 = flowToken(res4);
+const state3 = new URL(provider.approvePending(pid3, token3)).searchParams.get("state");
+const code3 = new URL(await provider.completeGoogleSignIn(state3, "good-google-code", token3)).searchParams.get("code");
 const tokens3 = await provider.exchangeAuthorizationCode(client, code3, verifier);
 const info3 = await provider.verifyAccessToken(tokens3.access_token);
 const uid3 = info3.extra.userId;
@@ -333,16 +391,34 @@ try {
   // if the Google endpoint ever moves.
   const pendingId = (authzBody.match(/name="pending_id" value="([^"]+)"/) || [])[1];
   check("the consent page carries a usable pending id", Boolean(pendingId));
+  // The real browser holds the flow cookie /authorize just set; carry it the
+  // way a browser would, since the consent POST now requires it.
+  const authzCookie = (authz.headers.get("set-cookie") ?? "").split(";")[0];
+  check("the HTTP /authorize response sets the flow cookie", authzCookie.startsWith("gsc_auth_flow="), authzCookie);
+
   if (pendingId) {
-    const submitted = await fetch(`${BASE}/oauth/consent`, {
+    // ATTACK over HTTP: the cross-site POST an attacker's page would make
+    // arrives with no cookie, because the cookie is SameSite=Lax.
+    const forged = await fetch(`${BASE}/oauth/consent`, {
       method: "POST",
       redirect: "manual",
       headers: { "Content-Type": "application/x-www-form-urlencoded" },
       body: new URLSearchParams({ pending_id: pendingId, decision: "allow" }).toString(),
     });
+    check("ATTACK over HTTP: consent POST without the cookie is refused", forged.status === 400, `got ${forged.status}`);
+    check("the refusal does not leak a Google URL", !(forged.headers.get("location") ?? "").includes("accounts.google.com"));
+
+    const submitted = await fetch(`${BASE}/oauth/consent`, {
+      method: "POST",
+      redirect: "manual",
+      headers: { "Content-Type": "application/x-www-form-urlencoded", Cookie: authzCookie },
+      body: new URLSearchParams({ pending_id: pendingId, decision: "allow" }).toString(),
+    });
     check("approving consent redirects onward", submitted.status === 302, `got ${submitted.status}`);
     const location = submitted.headers.get("location") ?? "";
     check("consent redirects to Google's sign-in", location.startsWith("https://accounts.google.com/"), location.slice(0, 80));
+    const sentState = new URL(location).searchParams.get("state");
+    check("the state sent to Google is not the pending id", Boolean(sentState) && sentState !== pendingId, `state=${sentState}`);
 
     let allowed = false;
     try {

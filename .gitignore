@@ -21,3 +21,6 @@ secrets/
 !manifest.json
 demo-mock/
 probe-platform-properties.mjs
+
+# Stray reproduction scripts from audits; belong in the scratchpad, not the repo.
+repro-*.mjs

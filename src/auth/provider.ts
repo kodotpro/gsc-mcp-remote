@@ -26,6 +26,7 @@ import type { AuthDb } from "./db.js";
 import { newToken, sha256hex, vaultEncrypt, vaultDecrypt } from "./crypto.js";
 import type { GoogleIdentityLike } from "./google-identity.js";
 import { consentPage, redirectsAreRecognised } from "./consent.js";
+import { authCookieHeader, browserTokenHash, browserTokenMatches, newBrowserToken } from "./browser-binding.js";
 
 const ACCESS_TTL_MS = 60 * 60 * 1000;            // 1 hour
 const REFRESH_TTL_MS = 30 * 24 * 60 * 60 * 1000; // 30 days
@@ -42,6 +43,11 @@ export interface GscOAuthProviderOptions {
   identity: GoogleIdentityLike;
   /** Canonical resource identifier tokens are bound to, e.g. https://gsc.example.com/mcp */
   resourceUrl: string;
+  /**
+   * Whether to mark the flow cookie Secure. False only for the local
+   * http://localhost rehearsal; any real deployment is https.
+   */
+  cookieSecure?: boolean;
 }
 
 export class GscOAuthProvider implements OAuthServerProvider {
@@ -49,6 +55,7 @@ export class GscOAuthProvider implements OAuthServerProvider {
   private readonly vaultKey: Buffer;
   private readonly identity: GoogleIdentityLike;
   private readonly resourceUrl: string;
+  private readonly cookieSecure: boolean;
 
   constructor(opts: GscOAuthProviderOptions) {
     this.db = opts.db;
@@ -56,6 +63,7 @@ export class GscOAuthProvider implements OAuthServerProvider {
     this.identity = opts.identity;
     // Normalise: no trailing slash, no hash — RFC 8707 comparisons are exact.
     this.resourceUrl = opts.resourceUrl.replace(/[#?].*$/, "").replace(/\/+$/, "");
+    this.cookieSecure = opts.cookieSecure ?? true;
   }
 
   // ---- client registrations (DCR) ----------------------------------------
@@ -88,12 +96,21 @@ export class GscOAuthProvider implements OAuthServerProvider {
    */
   async authorize(client: OAuthClientInformationFull, params: AuthorizationParams, res: Response): Promise<void> {
     const pendingId = newToken("pend");
+    // Independent of the pending id, because this is what travels to Google
+    // and comes back through the victim's browser in the attack this closes.
+    const googleState = newToken("gs");
+    // The one value an attacker cannot obtain: it goes to the browser as a
+    // cookie, and only its hash is stored.
+    const browserToken = newBrowserToken();
+
     this.db.prepare(
       `INSERT INTO pending_authorizations
-         (id, client_id, code_challenge, redirect_uri, client_state, scopes, resource, expires_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
+         (id, google_state, browser_hash, client_id, code_challenge, redirect_uri, client_state, scopes, resource, expires_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
     ).run(
       pendingId,
+      googleState,
+      browserTokenHash(browserToken),
       client.client_id,
       params.codeChallenge,
       params.redirectUri,
@@ -105,6 +122,7 @@ export class GscOAuthProvider implements OAuthServerProvider {
 
     res.setHeader("Content-Type", "text/html; charset=utf-8");
     res.setHeader("Cache-Control", "no-store");
+    res.setHeader("Set-Cookie", authCookieHeader(browserToken, this.cookieSecure));
     res.send(consentPage({
       pendingId,
       clientName: client.client_name || "Unnamed application",
@@ -120,14 +138,25 @@ export class GscOAuthProvider implements OAuthServerProvider {
    * URL to send them to. The pending row is left in place — the Google
    * callback consumes it.
    */
-  approvePending(pendingId: string): string {
+  approvePending(pendingId: string, browserToken: string | undefined): string {
     const row = this.db.prepare(
-      "SELECT id, expires_at FROM pending_authorizations WHERE id = ?"
-    ).get(pendingId) as { id: string; expires_at: number } | undefined;
+      "SELECT id, expires_at, browser_hash, google_state FROM pending_authorizations WHERE id = ?"
+    ).get(pendingId) as { id: string; expires_at: number; browser_hash: string; google_state: string } | undefined;
     if (!row || row.expires_at < Date.now()) {
       throw new AccessDeniedError("This authorization request expired. Start the connection again from your client.");
     }
-    return this.identity.authUrl(pendingId);
+    // The consent page exists to let the person REFUSE a client they do not
+    // recognise. Without this check an attacker could mint a pending id and
+    // have a victim's browser POST it cross-site, so the page the victim never
+    // saw would be "approved" on their behalf.
+    if (!browserTokenMatches(browserToken, row.browser_hash)) {
+      throw new AccessDeniedError(
+        "This approval did not come from the browser that started the connection. " +
+        "Start the connection again from your Claude client."
+      );
+    }
+    // Google gets the independent state, never the pending id.
+    return this.identity.authUrl(row.google_state);
   }
 
   /** Called when the person cancels: the parked request is discarded. */
@@ -140,19 +169,42 @@ export class GscOAuthProvider implements OAuthServerProvider {
    * entry, and a one-time authorization code for the waiting client.
    * Returns the URL to send the browser back to.
    */
-  async completeGoogleSignIn(state: string, googleCode: string): Promise<string> {
+  async completeGoogleSignIn(state: string, googleCode: string, browserToken: string | undefined): Promise<string> {
     const pending = this.db.prepare(
-      "SELECT * FROM pending_authorizations WHERE id = ?"
+      "SELECT * FROM pending_authorizations WHERE google_state = ?"
     ).get(state) as
-      | { id: string; client_id: string; code_challenge: string; redirect_uri: string; client_state: string | null; scopes: string; resource: string | null; expires_at: number }
+      | { id: string; google_state: string; browser_hash: string; client_id: string; code_challenge: string; redirect_uri: string; client_state: string | null; scopes: string; resource: string | null; expires_at: number }
       | undefined;
 
-    // Single-use regardless of outcome.
-    this.db.prepare("DELETE FROM pending_authorizations WHERE id = ?").run(state);
-
     if (!pending || pending.expires_at < Date.now()) {
+      // Nothing usable to keep; clear any stale row.
+      this.db.prepare("DELETE FROM pending_authorizations WHERE google_state = ?").run(state);
       throw new AccessDeniedError("This sign-in link expired or was already used. Start the connection again from your Claude client.");
     }
+
+    // THE confused-deputy check. Without it, anyone holding this state could
+    // complete the Google leg in any browser: an attacker approves consent in
+    // their own, mails the resulting accounts.google.com link to a victim, and
+    // the victim's Google account gets bound to the attacker's client, PKCE
+    // challenge and redirect_uri. The victim's only visible artefact is a
+    // genuine Google screen for this very app, so nothing looks wrong to them.
+    // Refuse BEFORE exchanging the code, so no Google grant is created for a
+    // flow that cannot legitimately complete.
+    // Reject WITHOUT consuming the row. Deleting first would let any single
+    // failed callback — a stray prefetch, a link opened in the wrong browser —
+    // destroy a flow the correct browser could still complete. The state is
+    // 256 bits of randomness, so leaving the row alive for its remaining TTL
+    // exposes nothing.
+    if (!browserTokenMatches(browserToken, pending.browser_hash)) {
+      throw new AccessDeniedError(
+        "This sign-in was started in a different browser, so it cannot be completed here. " +
+        "If you did not start it yourself, nothing has been shared — you can close this page. " +
+        "To connect your own account, start again from your Claude client."
+      );
+    }
+
+    // Committed now: single-use from this point, whatever Google says next.
+    this.db.prepare("DELETE FROM pending_authorizations WHERE google_state = ?").run(state);
 
     const profile = await this.identity.exchange(googleCode);
     this.identity.assertAllowed(profile.email);

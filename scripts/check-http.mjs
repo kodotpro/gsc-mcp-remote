@@ -116,6 +116,22 @@ try {
     String(mem.heapUsedPercent)
   );
   check("/healthz reports rss", typeof mem.rssMb === "number" && mem.rssMb > 0, String(mem.rssMb));
+  // RSS against the cgroup limit is the number to alert on: off-heap image
+  // buffers drove a container to an OOM kill while heapUsedPercent read 2.1%.
+  check(
+    "/healthz reports rss against the container limit",
+    "containerLimitMb" in mem && "rssPercentOfLimit" in mem,
+    JSON.stringify(mem)
+  );
+  check("/healthz reports off-heap bytes", typeof mem.externalMb === "number", String(mem.externalMb));
+  // Saturation of the ceilings is the early warning that was previously invisible.
+  const lim = health.limiters ?? {};
+  check(
+    "/healthz reports the concurrency ceilings and their saturation",
+    typeof lim.outboundFetch?.limit === "number" && typeof lim.searchConsoleQuery?.limit === "number"
+      && typeof lim.outboundFetch?.queued === "number",
+    JSON.stringify(lim)
+  );
   // The row ceiling is the single biggest driver of peak memory, so it is
   // reported alongside it rather than left to be read out of the config.
   check("/healthz reports the row ceiling in force", health.maxRowsPerQuery === 25000, String(health.maxRowsPerQuery));
@@ -207,6 +223,14 @@ try {
   check("the policy names the single scope requested", privacyBody.includes("webmasters.readonly"));
   check("the policy names the deletion control that exists", privacyBody.includes("disconnect_account"));
   check("the policy states data is not used for AI training", /train any machine-learning/i.test(privacyBody));
+  // The server sets a flow cookie for the OAuth browser binding. A privacy
+  // page claiming otherwise would be a false statement on the page Google's
+  // reviewer reads, so the disclosure and the code are pinned together here.
+  check(
+    "the policy discloses the sign-in cookie the server actually sets",
+    /exactly one cookie/i.test(privacyBody) && /HttpOnly/i.test(privacyBody),
+    "privacy page must disclose the gsc_auth_flow cookie"
+  );
   check("the policy renders the configured contact address", privacyBody.includes(CONTACT));
 
   // -- the self-hosted web fonts ---------------------------------------------

@@ -184,7 +184,9 @@ Logs record session open/close and token refreshes, never tokens or query data. 
 }
 ```
 
-`heapUsedPercent` is the number to alert on — the V8 heap ceiling is what aborts the process, not RSS and not the container limit. (`heapLimitMb` sits above `--max-old-space-size` because it counts the young generation too, so a container configured for 384 reports about 480.)
+**`rssPercentOfLimit` is the number to alert on**, not `heapUsedPercent`. This doc said the opposite until v3.7.0, and the error mattered: concurrent image fetches buffer their bytes *off-heap*, so a measured run that drove RSS past the 512 MB container limit into an OOM kill showed `heapUsedPercent` at **2.1%** — the heap was nearly empty while the container died. `containerLimitMb` is read from the cgroup the kernel actually enforces, so the comparison needs no figure copied from this file. Read `heapUsedPercent` for the row-accumulation side, and `externalMb` for the off-heap side. (`heapLimitMb` sits above `--max-old-space-size` because it counts the young generation, so 384 reports about 480.)
+
+`limiters` shows the two concurrency ceilings and how saturated they are. Work queueing there means the ceilings are doing their job; *sustained* queueing means the box needs more room or the limits need raising.
 
 Measured on the default container: each session's tool registry costs about **0.5 MB**, and one Search Analytics query at the 25,000-row ceiling costs about **17 MB** including the transient JSON. So sustained pressure means *concurrent large queries*, not too many sessions — 120 idle sessions cost only ~55 MB between them. If you raise `GSC_MAX_TOTAL_ROWS`, peak memory scales with it: at 100,000 rows one query costs roughly 68 MB, and four concurrent ones come within reach of a 384 MB heap.
 
@@ -286,6 +288,9 @@ deployment needs.
 | `GSC_RATE_LIMIT_PER_MIN` | 60 | Requests per user per minute; `429` with `Retry-After` |
 | `GSC_MAX_TOTAL_ROWS` | 25000 | Rows one Search Analytics query may accumulate; ~17 MB peak per query |
 | `GSC_GOOGLE_TIMEOUT_MS` | 60000 | Deadline on each Google API call |
+| `GSC_MAX_CONCURRENT_FETCHES` | 3 | Outbound fetches of caller-supplied URLs, process-wide |
+| `GSC_MAX_CONCURRENT_GSC_QUERIES` | 6 | Search Analytics queries in flight, process-wide |
+| `GSC_MAX_IMAGE_BYTES` | 3145728 | Per-image ceiling for `image_page_audit` |
 | `GSC_REPORT_DIR` | cwd | The only directory `generate_report` may write into |
 
 ---

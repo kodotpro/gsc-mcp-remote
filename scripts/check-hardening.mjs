@@ -16,6 +16,7 @@ import { isPrivateAddress, assertPublicUrl, safeFetch } from "../dist/net-guard.
 import { confineReportPath } from "../dist/tools/generate-report.js";
 import { sniffImageFormat, dimensionsAreSafeFor, mediaTypeFor } from "../dist/tools/image-page-audit.js";
 import { imageDimensions } from "../dist/image-dimensions.js";
+import { createLimiter, outboundFetchLimiter, googleFetchLimiter } from "../dist/concurrency.js";
 
 const failures = [];
 const check = (label, ok, detail = "") => {
@@ -285,6 +286,85 @@ const misbehaved = HOSTILE.filter(([, fmt, buf]) => {
 const elapsedMs = Number(process.hrtime.bigint() - started) / 1e6;
 check(`${HOSTILE.length} hostile inputs all return null without throwing`, misbehaved.length === 0, misbehaved.join(", "));
 check(`hostile input handled promptly (${elapsedMs.toFixed(1)}ms, budget 2000ms)`, elapsedMs < 2000, `${elapsedMs}ms`);
+
+// ---------------------------------------------------------------------------
+console.log("\nConcurrency ceilings");
+// ---------------------------------------------------------------------------
+// Measured before these existed: 8 concurrent image_page_audit calls reached
+// 444 MB RSS against a 512 MB container limit — and 8 is exactly one user's
+// session quota, so one account could OOM-kill every other tenant. The bytes
+// were off-heap, so heapUsedPercent read 2.1% while the container died.
+check("outbound fetches are capped", outboundFetchLimiter.stats().limit <= 4, String(outboundFetchLimiter.stats().limit));
+check("Search Console queries are capped", googleFetchLimiter.stats().limit <= 8, String(googleFetchLimiter.stats().limit));
+
+// The limit must actually hold: a released permit wakes one waiter, but a
+// fresh caller can arrive first, so a single check (rather than a loop) would
+// let the ceiling be exceeded by one on every release.
+const held = await (async () => {
+  const lim = createLimiter("test", 3, 5000);
+  let active = 0, peak = 0;
+  await Promise.all(Array.from({ length: 24 }, () => lim(async () => {
+    active++; peak = Math.max(peak, active);
+    await new Promise((r) => setTimeout(r, 10));
+    active--;
+  })));
+  return peak;
+})();
+check(`24 tasks against a limit of 3 peak at 3 (got ${held})`, held === 3, String(held));
+
+// A saturated queue must shed load rather than grow without bound: with no
+// AbortSignal threaded through the tools, a request that outlives the client's
+// timeout keeps working and its retry stacks another.
+const shed = await (async () => {
+  const lim = createLimiter("tiny", 1, 200);
+  const hog = lim(() => new Promise((r) => setTimeout(r, 1500)));
+  const t0 = Date.now();
+  try {
+    await lim(async () => "should not run");
+    return { shedMs: null };
+  } catch (e) {
+    return { shedMs: Date.now() - t0, message: e.message };
+  } finally {
+    await hog;
+  }
+})();
+check("a saturated queue sheds load instead of queueing forever", shed.shedMs !== null && shed.shedMs < 1000, JSON.stringify(shed));
+check("the shed message tells the caller to retry", /retry/i.test(shed.message ?? ""), shed.message);
+
+// ---------------------------------------------------------------------------
+console.log("\nFetch buffer discipline");
+// ---------------------------------------------------------------------------
+// Two properties at once: a bounded peak during transfer (one preallocated
+// buffer, no Buffer.concat doubling), AND no over-retention afterwards, since
+// a subarray is a view that would pin the whole allocation for a tiny body.
+const bufferProbe = await (async () => {
+  const http = await import("node:http");
+  const srv = http.createServer((req, res) => {
+    const n = req.url === "/small" ? 2048 : 2_500_000;
+    res.writeHead(200, { "content-type": "application/octet-stream" });
+    res.end(Buffer.alloc(n, 1));
+  });
+  await new Promise((r) => srv.listen(0, "127.0.0.1", r));
+  const port = srv.address().port;
+  const max = 3 * 1024 * 1024;
+  const out = {};
+  for (const path of ["/small", "/large"]) {
+    const r = await safeFetch(`http://127.0.0.1:${port}${path}`, { timeoutMs: 5000, maxBytes: max, userAgent: "t", allowPrivate: true });
+    out[path] = { size: r.body.length, retained: r.body.buffer.byteLength };
+  }
+  srv.close();
+  return out;
+})();
+check(
+  "a small body does not pin the whole preallocated buffer",
+  bufferProbe["/small"].retained < 3 * 1024 * 1024,
+  JSON.stringify(bufferProbe["/small"])
+);
+check(
+  "a large body is returned without a second full copy",
+  bufferProbe["/large"].size === 2_500_000 && bufferProbe["/large"].retained <= 3 * 1024 * 1024,
+  JSON.stringify(bufferProbe["/large"])
+);
 
 if (failures.length > 0) {
   console.error(`\nHardening tests: ${failures.length} failure(s).`);

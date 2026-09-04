@@ -1,4 +1,5 @@
 import { getSearchConsoleClient, resolveSiteUrl } from "./auth.js";
+import { googleFetchLimiter } from "./concurrency.js";
 
 export interface SearchAnalyticsRow {
   keys: string[];
@@ -113,7 +114,10 @@ export async function fetchRows(params: QueryParams, siteUrlOverride?: string): 
   let truncated = false;
 
   while (true) {
-    const response = await client.searchanalytics.query({
+    // One permit per page, released before the rows are processed. Bounds how
+    // many ~17 MB row sets can exist at once across every concurrent tool
+    // call, including generate_report's six parallel sub-tools.
+    const response = await googleFetchLimiter(() => client.searchanalytics.query({
       siteUrl,
       requestBody: {
         startDate: params.startDate,
@@ -127,7 +131,7 @@ export async function fetchRows(params: QueryParams, siteUrlOverride?: string): 
         // `web` when omitted, matching prior behaviour.
         ...(params.type ? { type: params.type } : {}),
       },
-    });
+    }));
 
     const rows = response.data.rows;
     if (!rows || rows.length === 0) break;

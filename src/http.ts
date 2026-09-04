@@ -19,6 +19,7 @@
  * oauth branch, so bearer mode and stdio keep running on older Node versions.
  */
 import { randomUUID, timingSafeEqual } from "node:crypto";
+import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import * as v8 from "node:v8";
@@ -40,9 +41,11 @@ import { requireBearerAuth } from "@modelcontextprotocol/sdk/server/auth/middlew
 
 import { createServer, SERVER_VERSION } from "./server-factory.js";
 import { MAX_TOTAL_ROWS } from "./analytics.js";
+import { googleFetchLimiter, outboundFetchLimiter } from "./concurrency.js";
 import { setRemoteMode } from "./runtime.js";
 import { runWithUserContext, type UserContext } from "./request-context.js";
 import { deniedPage } from "./auth/consent.js";
+import { AUTH_COOKIE, clearAuthCookieHeader, readCookie } from "./auth/browser-binding.js";
 import { landingPage, privacyPage, type SiteInfo } from "./web-pages.js";
 import { FONT_ROUTES, IMAGE_ROUTES, canonicalBase } from "./web-theme.js";
 import { currentStars, startStarPolling } from "./github-stars.js";
@@ -200,28 +203,61 @@ async function closeSession(sessionId: string): Promise<void> {
 /**
  * Process memory, for watching real pressure instead of inferring it.
  *
- * The interesting number is heapUsedPercent against the V8 ceiling, because
- * that is what actually aborts the process — not RSS, and not the container
- * limit. `heap_size_limit` derives from --max-old-space-size but sits above it,
- * because it counts the young generation too — a container configured for 384
- * reports roughly 480 here. That makes it the honest thing to measure against,
- * rather than a figure copied from the compose file.
+ * READ THIS BEFORE ALERTING ON heapUsedPercent. An earlier version of this
+ * comment called it "the honest thing to measure"; that was wrong, and the
+ * error mattered. Concurrent image fetches buffer their bytes OFF-heap, so a
+ * measured run that drove RSS to 444 MB — past the 512 MB container limit and
+ * into an OOM kill — showed heapUsedPercent at 2.1%. The heap was almost
+ * empty while the container died.
+ *
+ * So alert on rssMb against the container limit, which is what the kernel
+ * actually enforces, and read heapUsedPercent only for the row-accumulation
+ * side. containerLimitMb is read from the cgroup where the kernel publishes
+ * it, so the comparison needs no figure copied from the compose file.
+ *
+ * `heap_size_limit` derives from --max-old-space-size but sits above it,
+ * because it counts the young generation too — 384 reports roughly 480.
  *
  * Sizing context, measured on the default 384 MB heap: each session's tool
  * registry costs ~0.5 MB, and one Search Analytics query at the default
  * 25,000-row ceiling costs ~17 MB including the transient JSON. Sustained
  * pressure above ~85% means concurrent large queries, not too many sessions.
  */
-function memoryReport(): Record<string, number> {
+/**
+ * The container's memory ceiling, straight from the cgroup the kernel enforces.
+ * Read once: it does not change while the process lives. Absent outside a
+ * container, and "max" on an unlimited one.
+ */
+const containerLimitBytes = (() => {
+  for (const p of ["/sys/fs/cgroup/memory.max", "/sys/fs/cgroup/memory/memory.limit_in_bytes"]) {
+    try {
+      const raw = fs.readFileSync(p, "utf8").trim();
+      if (raw === "max") return undefined;
+      const n = Number(raw);
+      // An unset v1 limit reads as a near-2^63 sentinel; treat it as no limit.
+      if (Number.isFinite(n) && n > 0 && n < 2 ** 53) return n;
+    } catch {
+      // not this cgroup layout, or not containerised
+    }
+  }
+  return undefined;
+})();
+
+function memoryReport(): Record<string, number | null> {
   const { heapUsed, rss, external } = process.memoryUsage();
   const limit = v8.getHeapStatistics().heap_size_limit;
   const mb = (bytes: number) => Math.round((bytes / 1048576) * 10) / 10;
   return {
+    // The number to alert on: RSS against what the kernel will kill you for.
+    rssMb: mb(rss),
+    containerLimitMb: containerLimitBytes ? mb(containerLimitBytes) : null,
+    rssPercentOfLimit: containerLimitBytes ? Math.round((rss / containerLimitBytes) * 1000) / 10 : null,
+    // Off-heap bytes — the component that made the earlier heap-only reading
+    // misleading during concurrent image fetches.
+    externalMb: mb(external),
     heapUsedMb: mb(heapUsed),
     heapLimitMb: mb(limit),
     heapUsedPercent: Math.round((heapUsed / limit) * 1000) / 10,
-    rssMb: mb(rss),
-    externalMb: mb(external),
   };
 }
 
@@ -245,6 +281,7 @@ export async function startHttpServer(): Promise<HttpServer> {
         provider: import("./auth/provider.js").GscOAuthProvider;
         factory: import("./auth/google-clients.js").UserClientFactory;
         publicUrl: string;
+        cookieSecure: boolean;
         resourceMetadataUrl: string;
         authMiddleware: RequestHandler;
       }
@@ -294,7 +331,8 @@ export async function startHttpServer(): Promise<HttpServer> {
     const vaultKey = authModules.crypto.loadOrCreateVaultKey(keyPath);
     const identity = authModules.identity.googleIdentityFromEnv(publicUrl);
     const resourceUrl = `${publicUrl}/mcp`;
-    const provider = new authModules.provider.GscOAuthProvider({ db, vaultKey, identity, resourceUrl });
+    const cookieSecure = publicUrl.startsWith("https:");
+    const provider = new authModules.provider.GscOAuthProvider({ db, vaultKey, identity, resourceUrl, cookieSecure });
     const factory = new authModules.clients.UserClientFactory(provider, identity);
 
     const resourceMetadataUrl = `${publicUrl}/.well-known/oauth-protected-resource/mcp`;
@@ -303,7 +341,7 @@ export async function startHttpServer(): Promise<HttpServer> {
       resourceMetadataUrl,
     });
 
-    oauth = { provider, factory, publicUrl, resourceMetadataUrl, authMiddleware };
+    oauth = { provider, factory, publicUrl, cookieSecure, resourceMetadataUrl, authMiddleware };
 
     // Public host must pass Host-header validation without extra config.
     const publicHost = new URL(publicUrl).host;
@@ -453,11 +491,18 @@ export async function startHttpServer(): Promise<HttpServer> {
       requestsPerMinute: RATE_LIMIT_PER_MIN,
       maxRowsPerQuery: MAX_TOTAL_ROWS,
       memory: memoryReport(),
+      // Saturation here is the early warning that used to be invisible: work
+      // queueing means the ceilings are doing their job, and sustained queueing
+      // means the box needs more room or the limits need raising.
+      limiters: {
+        outboundFetch: outboundFetchLimiter.stats(),
+        searchConsoleQuery: googleFetchLimiter.stats(),
+      },
     });
   });
 
   if (oauth) {
-    const { provider, publicUrl } = oauth;
+    const { provider, publicUrl, cookieSecure } = oauth;
 
     // Discovery metadata, DCR, /authorize, /token, /revoke — rate-limited by
     // the SDK. This is everything a connector UI needs to onboard by URL.
@@ -476,15 +521,20 @@ export async function startHttpServer(): Promise<HttpServer> {
     app.post("/oauth/consent", express.urlencoded({ extended: false }), async (req: Request, res: Response) => {
       const pendingId = typeof req.body?.pending_id === "string" ? req.body.pending_id : "";
       const decision = typeof req.body?.decision === "string" ? req.body.decision : "";
+      // Set on the /authorize response. SameSite=Lax means a cross-site POST
+      // from an attacker's page arrives without it, which is what makes the
+      // consent page refusable rather than forgeable.
+      const browserToken = readCookie(req.headers.cookie, AUTH_COOKIE);
       res.setHeader("Cache-Control", "no-store");
       try {
         if (!pendingId) throw new Error("Missing request identifier.");
         if (decision !== "allow") {
           provider.denyPending(pendingId);
+          res.setHeader("Set-Cookie", clearAuthCookieHeader(cookieSecure));
           res.status(200).type("html").send(deniedPage());
           return;
         }
-        res.redirect(provider.approvePending(pendingId));
+        res.redirect(provider.approvePending(pendingId, browserToken));
       } catch (err: unknown) {
         const message = err instanceof Error ? err.message : String(err);
         res.status(400).type("html").send(errorPage("Could not continue", message));
@@ -499,11 +549,15 @@ export async function startHttpServer(): Promise<HttpServer> {
       try {
         if (googleError) throw new Error(`Google sign-in was not completed (${googleError}).`);
         if (!state || !code) throw new Error("Missing state or code in Google's callback.");
-        const redirectTo = await provider.completeGoogleSignIn(state, code);
+        const browserToken = readCookie(req.headers.cookie, AUTH_COOKIE);
+        const redirectTo = await provider.completeGoogleSignIn(state, code, browserToken);
+        // The flow is over either way; the cookie has no further use.
+        res.setHeader("Set-Cookie", clearAuthCookieHeader(cookieSecure));
         res.redirect(redirectTo);
       } catch (err: unknown) {
         const message = err instanceof Error ? err.message : String(err);
         console.error("[oauth] google callback failed:", message);
+        res.setHeader("Set-Cookie", clearAuthCookieHeader(cookieSecure));
         res.status(400).type("html").send(errorPage("Sign-in didn't complete", message));
       }
     });

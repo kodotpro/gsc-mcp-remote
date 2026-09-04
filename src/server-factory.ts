@@ -58,7 +58,7 @@ const SITE_URL_PARAM = z
     "Defaults to the configured property. Call list_properties to see what this account can access."
   );
 
-export const SERVER_VERSION = "3.6.0";
+export const SERVER_VERSION = "3.7.0";
 
 export function createServer(): McpServer {
   const server = new McpServer({
@@ -734,7 +734,10 @@ function registerTools(server: McpServer): void {
     {
       urls: z.array(z.string()).min(1).max(5).describe("Page URLs to audit (1-5, from your own site)"),
       fetch_metadata: z.boolean().default(true).describe("Also read EXIF/IPTC/XMP metadata from the image files"),
-      max_images_per_page: z.number().default(12).describe("Maximum images fetched and weighed per page (HTML checks still cover all images)"),
+      // Bounded because it multiplies in-flight work: each image is a network
+      // round trip holding an outbound-fetch permit. The HTML checks still cover
+      // every image on the page regardless of how many are fetched.
+      max_images_per_page: z.number().int().min(1).max(50).default(12).describe("Maximum images fetched and weighed per page, 1-50 (HTML checks still cover all images)"),
       max_images_reported: z.number().default(20).describe("Maximum per-image rows returned per page"),
     },
     async ({ urls, fetch_metadata, max_images_per_page, max_images_reported }) => {

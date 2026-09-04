@@ -29,6 +29,8 @@ import { isIP } from "node:net";
 import * as http from "node:http";
 import * as https from "node:https";
 
+import { outboundFetchLimiter } from "./concurrency.js";
+
 export class BlockedUrlError extends Error {
   constructor(message: string) {
     super(message);
@@ -229,7 +231,33 @@ export interface SafeFetchOptions {
  * a single deadline that also covers reading the body, and a byte ceiling
  * applied while streaming rather than after the fact.
  */
+/**
+ * Hands back only the bytes that arrived, without over-retaining.
+ *
+ * The read buffer is preallocated at maxBytes so the transfer has a hard,
+ * predictable peak. But `subarray` is a VIEW onto that allocation, so returning
+ * one would make a 2 KB favicon pin the whole 3 MB buffer for as long as the
+ * caller holds the body — trading a bounded peak for an unbounded retention.
+ *
+ * So: copy out when the body is small relative to the allocation (the copy is
+ * cheap precisely because it is small, and it frees the big buffer), and take
+ * the view when it is large (where copying would reintroduce the doubling this
+ * replaced).
+ */
+function finalBody(buffer: Buffer, size: number, maxBytes: number): Buffer {
+  if (size * 2 <= maxBytes) return Buffer.from(buffer.subarray(0, size));
+  return buffer.subarray(0, size);
+}
+
 export function safeFetch(rawUrl: string, opts: SafeFetchOptions): Promise<SafeFetchResult> {
+  // Process-wide ceiling, taken here because this is the leaf: the permit is
+  // held across one request and released before the caller does anything with
+  // the body, so a queue always drains. See src/concurrency.ts for why it must
+  // not be acquired per tool call.
+  return outboundFetchLimiter(() => safeFetchUnlimited(rawUrl, opts));
+}
+
+function safeFetchUnlimited(rawUrl: string, opts: SafeFetchOptions): Promise<SafeFetchResult> {
   const maxRedirects = opts.maxRedirects ?? 4;
 
   return new Promise<SafeFetchResult>((resolve, reject) => {
@@ -290,31 +318,43 @@ export function safeFetch(rawUrl: string, opts: SafeFetchOptions): Promise<SafeF
             return go(next, hop + 1); // every hop re-validated
           }
 
-          const chunks: Buffer[] = [];
+          // Write into one preallocated buffer rather than collecting chunks
+          // and Buffer.concat-ing them: concat allocates a SECOND full copy at
+          // the moment of completion, so a 20 MB download peaked at 40 MB —
+          // and it did so on the truncated paths too, where the bytes were
+          // about to be discarded. maxBytes is bounded and modest, so one
+          // allocation up front is cheaper than the copy it replaces.
+          const buffer = Buffer.allocUnsafe(opts.maxBytes);
           let size = 0;
           let truncated = false;
 
           res.on("data", (chunk: Buffer) => {
-            size += chunk.length;
-            if (size > opts.maxBytes) {
+            if (size + chunk.length > opts.maxBytes) {
+              // Keep what fits, so a truncated HTML page is still parseable.
+              const room = opts.maxBytes - size;
+              if (room > 0) {
+                chunk.copy(buffer, size, 0, room);
+                size += room;
+              }
               truncated = true;
               res.destroy();
               return;
             }
-            chunks.push(chunk);
+            chunk.copy(buffer, size);
+            size += chunk.length;
           });
           res.on("aborted", () => {
             if (truncated) {
-              finish(() => resolve({ status, headers: res.headers, body: Buffer.concat(chunks), url: target, truncated: true }));
+              finish(() => resolve({ status, headers: res.headers, body: finalBody(buffer, size, opts.maxBytes), url: target, truncated: true }));
             }
           });
           res.on("close", () => {
             if (truncated) {
-              finish(() => resolve({ status, headers: res.headers, body: Buffer.concat(chunks), url: target, truncated: true }));
+              finish(() => resolve({ status, headers: res.headers, body: finalBody(buffer, size, opts.maxBytes), url: target, truncated: true }));
             }
           });
           res.on("end", () => {
-            finish(() => resolve({ status, headers: res.headers, body: Buffer.concat(chunks), url: target, truncated }));
+            finish(() => resolve({ status, headers: res.headers, body: finalBody(buffer, size, opts.maxBytes), url: target, truncated }));
           });
           res.on("error", (err) => finish(() => reject(err)));
         }

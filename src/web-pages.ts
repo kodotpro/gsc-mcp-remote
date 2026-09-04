@@ -443,7 +443,13 @@ export function privacyPage(info: SiteInfo): string {
         answered by fetching live from Google's API and returning the result to
         your Claude client. Nothing is retained afterwards.</li>
     <li>Logs deliberately exclude tokens and the content of your queries.</li>
-    <li>No advertising or analytics trackers, and no cookies for tracking.</li>
+    <li>No advertising or analytics trackers, and no cookies for tracking. The
+        service sets exactly one cookie, and only while you are connecting: a
+        random value that ties the sign-in you started to the browser you
+        started it in, so nobody else can complete it in your name. It is
+        <code>HttpOnly</code>, scoped to the sign-in routes, expires after ten
+        minutes, and is cleared the moment the connection finishes. It carries
+        no identifier and is never used to track you.</li>
   </ul>
 
   <h2>What access is requested</h2>

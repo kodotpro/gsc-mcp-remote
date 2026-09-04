@@ -24,7 +24,18 @@ const USER_AGENT =
 
 const PAGE_TIMEOUT_MS = 15000;
 const IMAGE_TIMEOUT_MS = 12000;
-const MAX_IMAGE_BYTES = 20 * 1024 * 1024;
+/**
+ * Per-image byte ceiling.
+ *
+ * Was 20 MB, which measured 444 MB RSS at 8 concurrent audits — and 8 is one
+ * user's session quota, so a single account could OOM-kill the shared
+ * container. Nothing this tool does needs the whole file: dimensions come from
+ * the header (src/image-dimensions.ts) and EXIF/IPTC/XMP sit in the first
+ * blocks. 3 MB is generous for a web image and still flags the oversized ones,
+ * because `bytes` is reported from what the server sent, and a truncated read
+ * is reported as truncated rather than measured.
+ */
+const MAX_IMAGE_BYTES = Number(process.env.GSC_MAX_IMAGE_BYTES ?? 3 * 1024 * 1024);
 // HTML is parsed into a DOM, so it costs several times its wire size in
 // memory. Cap it well below the image ceiling.
 const MAX_PAGE_BYTES = 5 * 1024 * 1024;
@@ -386,6 +397,9 @@ export async function imagePageAudit(
   maxImagesPerPage: number = 12,
   maxImagesReported: number = 20
 ): Promise<{ audits: PageAudit[]; overall: Record<string, unknown> }> {
+  // Clamp here too, not only in the tool schema: this function is exported and
+  // composed from elsewhere, and the number multiplies in-flight fetches.
+  maxImagesPerPage = Math.max(1, Math.min(50, Math.floor(maxImagesPerPage) || 12));
   const audits: PageAudit[] = [];
 
   for (const rawUrl of urls.slice(0, 5)) {
