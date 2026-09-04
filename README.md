@@ -1,6 +1,6 @@
-# Google Search Console MCP Server
+# Google Search Console MCP Server (Remote)
 
-**A Google Search Console MCP server that answers SEO questions instead of returning API rows — across every property in your account. Connect it to Claude by URL and sign in with Google. Nothing to install.**
+**A Google Search Console Remote MCP server that answers SEO questions instead of returning API rows — across every property in your account. Connect it to Claude by URL and sign in with Google. Nothing to install.**
 
 [![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
 [![Node](https://img.shields.io/badge/node-%E2%89%A518-brightgreen.svg)](#run-it-on-your-own-machine)
