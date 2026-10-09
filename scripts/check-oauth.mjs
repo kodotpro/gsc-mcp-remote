@@ -19,6 +19,7 @@
 import { spawn } from "node:child_process";
 import { createHash, randomBytes } from "node:crypto";
 import * as fs from "node:fs";
+import { createRequire } from "node:module";
 import * as os from "node:os";
 import * as path from "node:path";
 
@@ -55,6 +56,14 @@ const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "gsc-oauth-test-"));
 const { openAuthDb } = await import("../dist/auth/db.js");
 const { loadOrCreateVaultKey, vaultEncrypt, vaultDecrypt } = await import("../dist/auth/crypto.js");
 const { GscOAuthProvider } = await import("../dist/auth/provider.js");
+const { redirectsAreRecognised } = await import("../dist/auth/consent.js");
+// require(), not import(): the server and the SDK's handlers use the SDK's CJS
+// build, and `instanceof` only holds against that same copy. An import() here
+// would load the ESM build and every class check below would be false for the
+// right error — the dual-package hazard http.ts documents.
+const { InvalidClientMetadataError, TemporarilyUnavailableError } = createRequire(import.meta.url)(
+  "@modelcontextprotocol/sdk/server/auth/errors.js"
+);
 
 const db = openAuthDb(path.join(tmp, "test.db"));
 const vaultKey = loadOrCreateVaultKey(path.join(tmp, "vault.key"));
@@ -134,6 +143,107 @@ const evilPid = (res2.html.match(/name="pending_id" value="([^"]+)"/) || [])[1];
 const evilToken = flowToken(res2);
 provider.denyPending(evilPid);
 await expectThrow("denied request cannot be approved afterwards", () => Promise.resolve(provider.approvePending(evilPid, evilToken)), "expired");
+
+// ---------------------------------------------------------------------------
+// Registration policy. DCR is open to anyone by design — claude.ai onboards a
+// server from a URL alone — so the control is on what a registration may BE,
+// and on what the consent page tells the person about it. Reported externally
+// as "unauthenticated registration"; these pin what stands behind it.
+// ---------------------------------------------------------------------------
+let regN = 0;
+const mk = (over = {}) => ({
+  client_id: `reg-${++regN}`,
+  client_id_issued_at: 1,
+  redirect_uris: ["http://127.0.0.1:41419/callback"],
+  token_endpoint_auth_method: "none",
+  ...over,
+});
+const rejects = (label, c, needle = "") => {
+  try {
+    provider.clientsStore.registerClient(c);
+    check(label, false, "was accepted");
+  } catch (e) {
+    check(label, e instanceof InvalidClientMetadataError && e.message.includes(needle), `${e?.constructor?.name}: ${e?.message}`);
+  }
+};
+const accepts = (label, c) => {
+  try {
+    provider.clientsStore.registerClient(c);
+    check(label, provider.clientsStore.getClient(c.client_id)?.client_id === c.client_id);
+  } catch (e) {
+    check(label, false, `rejected: ${e?.message}`);
+  }
+};
+
+// What the real clients send must keep working.
+accepts("registration: claude.ai's documented callback", mk({ client_name: "Claude", redirect_uris: ["https://claude.ai/api/mcp/auth_callback"] }));
+accepts("registration: Claude Code's loopback callback", mk({ client_name: "Claude Code (gsc)", redirect_uris: ["http://localhost:50123/callback"] }));
+accepts("registration: VS Code's loopback and web callbacks", mk({ client_name: "Visual Studio Code", redirect_uris: ["http://127.0.0.1:33418/", "https://vscode.dev/redirect"] }));
+accepts("registration: an IPv6 loopback callback", mk({ redirect_uris: ["http://[::1]:3000/cb"] }));
+accepts("registration: a private-use scheme (desktop apps use these)", mk({ client_name: "Cursor", redirect_uris: ["cursor://anysphere.cursor-retrieval/oauth/gsc/callback"] }));
+accepts("registration: another web client over https", mk({ client_name: "ChatGPT", redirect_uris: ["https://chatgpt.com/connector_platform_oauth_redirect"] }));
+
+// What an attacker can use to turn a free endpoint into free storage.
+rejects("registration: a 90 KB client_name is refused", mk({ client_name: "A".repeat(90_000) }), "client_name");
+rejects("registration: 2,000 redirect URIs are refused", mk({ redirect_uris: Array.from({ length: 2000 }, (_, i) => `https://m${i}.example.com/cb`) }), "at most");
+rejects("registration: one oversized redirect URI is refused", mk({ redirect_uris: [`https://x.example.com/${"a".repeat(2000)}`] }), "characters");
+rejects("registration: no redirect URI at all is refused", mk({ redirect_uris: [] }), "at least one");
+rejects("registration: a field that is individually legal but sums past the total is refused",
+  mk({ redirect_uris: Array.from({ length: 9 }, (_, i) => `https://s${i}.example.com/${"b".repeat(900)}`) }), "total");
+rejects("registration: an oversized free-text field is refused", mk({ scope: "s".repeat(5000) }), "scope");
+
+// MCP authorization spec: redirect URIs are localhost or https.
+rejects("registration: plain http to a remote host is refused", mk({ redirect_uris: ["http://remote-host.example.com/cb"] }), "https");
+rejects("registration: http to a look-alike of localhost is refused", mk({ redirect_uris: ["http://localhost.attacker.example/cb"] }), "https");
+
+// Unused metadata is dropped rather than stored and echoed.
+const withJunk = mk({ client_name: "junk", jwks: { keys: ["k".repeat(20_000)] }, software_statement: "z".repeat(20_000) });
+accepts("registration: unused jwks/software_statement do not cause a refusal", withJunk);
+const storedJunk = provider.clientsStore.getClient(withJunk.client_id);
+check("registration: unused jwks and software_statement are not stored", storedJunk && !("jwks" in storedJunk) && !("software_statement" in storedJunk));
+
+// What the person is shown.
+check("a documented Claude callback is recognised", redirectsAreRecognised({ redirect_uris: ["https://claude.ai/api/mcp/auth_callback"] }));
+check("claude.com's callback is recognised too", redirectsAreRecognised({ redirect_uris: ["https://claude.com/api/mcp/auth_callback"] }));
+check("an arbitrary path on claude.ai is NOT recognised", !redirectsAreRecognised({ redirect_uris: ["https://claude.ai/some/other/page"] }));
+check("claude.ai with a query string is NOT recognised", !redirectsAreRecognised({ redirect_uris: ["https://claude.ai/api/mcp/auth_callback?next=//evil.example"] }));
+check("a look-alike subdomain is NOT recognised", !redirectsAreRecognised({ redirect_uris: ["https://www.claude.ai/api/mcp/auth_callback"] }));
+check("userinfo cannot dress a stranger as claude.ai", !redirectsAreRecognised({ redirect_uris: ["https://claude.ai@attacker.example/api/mcp/auth_callback"] }));
+check("one trusted URI does not vouch for an untrusted sibling",
+  !redirectsAreRecognised({ redirect_uris: ["https://claude.ai/api/mcp/auth_callback", "https://attacker.example/cb"] }));
+
+const dressed = mk({ client_name: "Claude", redirect_uris: ["evil://claude.ai/cb"] });
+provider.clientsStore.registerClient(dressed);
+const resDressed = mockRes();
+await provider.authorize(dressed, { codeChallenge: challenge, redirectUri: "evil://claude.ai/cb", scopes: [] }, resDressed);
+check("a custom scheme dressed as claude.ai is warned about", resDressed.html.includes("not a Claude address"));
+check("the consent page shows the whole redirect URI, scheme included", resDressed.html.includes("evil://claude.ai/cb"));
+check("an unrecognised client's name is labelled unverified", resDressed.html.includes("not verified"));
+check("the documented Claude callback is not warned about", !res1.html.includes("not a Claude address"));
+check("a recognised client's name is not labelled unverified", !res1.html.includes("not verified"));
+provider.denyPending((resDressed.html.match(/name="pending_id" value="([^"]+)"/) || [])[1]);
+
+// The ceiling: junk displaces older junk, never a registration in active use.
+const capDb = openAuthDb(path.join(tmp, "cap.db"));
+const capProvider = new GscOAuthProvider({ db: capDb, vaultKey, identity: fakeIdentity, resourceUrl: RESOURCE, maxRegisteredClients: 3 });
+const count = () => capDb.prepare("SELECT COUNT(*) AS n FROM oauth_clients").get().n;
+const ids = () => capDb.prepare("SELECT client_id FROM oauth_clients ORDER BY rowid").all().map((r) => r.client_id);
+for (const id of ["a", "b", "c"]) capProvider.clientsStore.registerClient(mk({ client_id: id }));
+check("registrations up to the ceiling are kept", count() === 3);
+capProvider.clientsStore.registerClient(mk({ client_id: "d" }));
+check("past the ceiling the table does not grow", count() === 3, String(count()));
+check("past the ceiling the OLDEST unused registration is evicted", JSON.stringify(ids()) === JSON.stringify(["b", "c", "d"]), ids().join(","));
+for (const id of ["b", "c", "d"]) {
+  capDb.prepare("INSERT INTO access_tokens (token_hash, user_id, client_id, scopes, resource, expires_at, created_at) VALUES (?, 'u', ?, 'gsc:read', NULL, ?, ?)")
+    .run(`h-${id}`, id, Date.now() + 3_600_000, Date.now());
+}
+try {
+  capProvider.clientsStore.registerClient(mk({ client_id: "e" }));
+  check("a full table of in-use clients refuses rather than evicting them", false, "was accepted");
+} catch (e) {
+  check("a full table of in-use clients refuses rather than evicting them", e instanceof TemporarilyUnavailableError, `${e?.constructor?.name}: ${e?.message}`);
+}
+check("refusing evicts nothing", JSON.stringify(ids()) === JSON.stringify(["b", "c", "d"]), ids().join(","));
 
 // ---------------------------------------------------------------------------
 // Browser binding. These assertions replace one that USED to read
@@ -441,6 +551,20 @@ try {
     body: JSON.stringify({ client_name: "Google Search Console (official)", redirect_uris: ["https://attacker.example/steal"], token_endpoint_auth_method: "none", grant_types: ["authorization_code"], response_types: ["code"] }),
   });
   const evilBody = await evilReg.json();
+
+  // The external report's request, and the shapes that now bounce. These go
+  // through the SDK's real handler, so they also pin that our refusal surfaces
+  // as a 400 invalid_client_metadata and not the opaque 500 any other thrown
+  // error would become.
+  const regRaw = (body) => fetch(asMeta.registration_endpoint, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) });
+  const probe = await regRaw({ client_name: "ProbeAlpha", redirect_uris: ["https://attacker-alpha.example.com/cb"] });
+  check("an unauthenticated registration with a foreign https redirect is still accepted (by design)", probe.status === 201, `got ${probe.status}`);
+  const cleartext = await regRaw({ client_name: "x", redirect_uris: ["http://remote-host.example.com/cb"] });
+  const cleartextBody = await cleartext.json();
+  check("over HTTP: a cleartext remote redirect is a 400 invalid_client_metadata", cleartext.status === 400 && cleartextBody.error === "invalid_client_metadata", `${cleartext.status} ${JSON.stringify(cleartextBody)}`);
+  const huge = await regRaw({ client_name: "A".repeat(20_000), redirect_uris: ["https://big.example.com/cb"] });
+  const hugeBody = await huge.json();
+  check("over HTTP: an oversized registration is a 400 invalid_client_metadata", huge.status === 400 && hugeBody.error === "invalid_client_metadata", `${huge.status} ${JSON.stringify(hugeBody).slice(0, 120)}`);
   const evilAuthz = await fetch(
     `${asMeta.authorization_endpoint}?response_type=code&client_id=${encodeURIComponent(evilBody.client_id)}&redirect_uri=${encodeURIComponent("https://attacker.example/steal")}&code_challenge=${challenge}&code_challenge_method=S256&state=cs`,
     { redirect: "manual" }

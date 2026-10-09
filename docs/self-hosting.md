@@ -190,7 +190,7 @@ Logs record session open/close and token refreshes, never tokens or query data. 
 
 Measured on the default container: each session's tool registry costs about **0.5 MB**, and one Search Analytics query at the 25,000-row ceiling costs about **17 MB** including the transient JSON. So sustained pressure means *concurrent large queries*, not too many sessions — 120 idle sessions cost only ~55 MB between them. If you raise `GSC_MAX_TOTAL_ROWS`, peak memory scales with it: at 100,000 rows one query costs roughly 68 MB, and four concurrent ones come within reach of a 384 MB heap.
 
-Memory is capped at 512 MB with Node's heap at 384 MB, deliberately: Search Analytics results accumulate in memory, and the cap stops this service starving its neighbours. Four limits stop one caller taking the process down, since each session holds its own tool registry (~440 KB):
+Memory is capped at 512 MB with Node's heap at 384 MB, deliberately: Search Analytics results accumulate in memory, and the cap stops this service starving its neighbours. These limits stop one caller taking the process down, since each session holds its own tool registry (~440 KB):
 
 | Limit | Default | Variable | Applies in |
 |---|---|---|---|
@@ -198,6 +198,7 @@ Memory is capped at 512 MB with Node's heap at 384 MB, deliberately: Search Anal
 | Concurrent sessions per user | 8 | `GSC_MAX_SESSIONS_PER_USER` | `oauth` only |
 | Requests per user per minute | 60 | `GSC_RATE_LIMIT_PER_MIN` | both modes |
 | Rows accumulated per query | 25,000 | `GSC_MAX_TOTAL_ROWS` | both modes |
+| Stored client registrations | 10,000 | `GSC_MAX_REGISTERED_CLIENTS` | `oauth` only |
 | Deadline per Google API call | 60 s | `GSC_GOOGLE_TIMEOUT_MS` | both modes |
 
 Exceeding them returns `429`, or `503` at the server-wide ceiling, with `Retry-After` — rather than an OOM. A query that hits the row ceiling says so in its response instead of quietly reporting partial data. The per-user ceiling needs a per-request identity, so it only means anything in `oauth` mode; bearer mode has one tenant and is bounded by `GSC_MAX_SESSIONS` alone.
@@ -287,6 +288,7 @@ deployment needs.
 | `GSC_MAX_SESSIONS_PER_USER` | 8 | Sessions one user may hold; `429` beyond it. `oauth` mode only |
 | `GSC_RATE_LIMIT_PER_MIN` | 60 | Requests per user per minute; `429` with `Retry-After` |
 | `GSC_MAX_TOTAL_ROWS` | 25000 | Rows one Search Analytics query may accumulate; ~17 MB peak per query |
+| `GSC_MAX_REGISTERED_CLIENTS` | 10000 | Client registrations kept at once; the oldest never-used are evicted first. `oauth` mode only |
 | `GSC_GOOGLE_TIMEOUT_MS` | 60000 | Deadline on each Google API call |
 | `GSC_MAX_CONCURRENT_FETCHES` | 3 | Outbound fetches of caller-supplied URLs, process-wide |
 | `GSC_MAX_CONCURRENT_GSC_QUERIES` | 6 | Search Analytics queries in flight, process-wide |

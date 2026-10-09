@@ -333,7 +333,10 @@ export async function startHttpServer(): Promise<HttpServer> {
     const identity = authModules.identity.googleIdentityFromEnv(publicUrl);
     const resourceUrl = `${publicUrl}/mcp`;
     const cookieSecure = publicUrl.startsWith("https:");
-    const provider = new authModules.provider.GscOAuthProvider({ db, vaultKey, identity, resourceUrl, cookieSecure });
+    const provider = new authModules.provider.GscOAuthProvider({
+      db, vaultKey, identity, resourceUrl, cookieSecure,
+      maxRegisteredClients: process.env.GSC_MAX_REGISTERED_CLIENTS ? Number(process.env.GSC_MAX_REGISTERED_CLIENTS) : undefined,
+    });
     const factory = new authModules.clients.UserClientFactory(provider, identity);
 
     const resourceMetadataUrl = `${publicUrl}/.well-known/oauth-protected-resource/mcp`;

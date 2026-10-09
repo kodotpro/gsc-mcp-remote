@@ -303,7 +303,7 @@ This server holds other people's Google credentials, so the design is worth stat
 
 **Token discipline.** MCP tokens are random and stored only as SHA-256 hashes, so a stolen database yields no working credentials. Access tokens live an hour; refresh tokens rotate on every use, and presenting an already-rotated one is treated as theft and burns every session it belonged to. Tokens are audience-bound per [RFC 8707](https://www.rfc-editor.org/rfc/rfc8707).
 
-**A consent screen of its own.** Dynamic client registration is open to any caller by design, so `/authorize` does not forward straight to Google. It stops at a page naming the requesting application and the exact host that would receive the result, warning when that host is not a Claude address. Google's own screen cannot show you that — it is branded with *this server's* app name. That page is unframeable (`X-Frame-Options: DENY`, `frame-ancestors 'none'`).
+**A consent screen of its own.** Dynamic client registration is open to any caller by design, so `/authorize` does not forward straight to Google. It stops at a page naming the requesting application and the full redirect URI that would receive the result, warning unless that URI is a documented Claude callback or loopback, and labelling the application's self-chosen name as unverified when it does. Registrations are also bounded in size and count, and plain-`http` redirects to remote hosts are refused. Google's own screen cannot show you that — it is branded with *this server's* app name. That page is unframeable (`X-Frame-Options: DENY`, `frame-ancestors 'none'`).
 
 **Read-only by default.** Per-user mode requests exactly one Google scope, `webmasters.readonly`, and the write tools refuse to run in it.
 

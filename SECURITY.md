@@ -42,14 +42,21 @@ can read both. Protecting against a compromised host is out of scope.
 
 **Untrusted:** every HTTP caller, including one holding a valid token; every
 argument any tool receives; every URL a tool is asked to fetch; and any client
-that registers via dynamic client registration, which is deliberately open to
-unauthenticated callers as the MCP specification intends.
+that registers via dynamic client registration. Registration is deliberately
+open to unauthenticated callers: claude.ai and Claude Desktop add a server from
+a URL alone, which only works if a stranger can register. So the existence of
+an unauthenticated `/register` is not a finding; what a registration can then
+do is (below).
 
 Specifically in scope for a report:
 
 - Reading another user's Search Console data, or acting as another user
 - Extracting a Google refresh token, or a usable MCP token, from the database
-- Getting a token issued for an account that did not consent to it
+- Getting a token issued for an account that did not consent to it, including
+  by approving the consent page on someone else's behalf or completing the
+  Google leg in a different browser than the one that started it
+- Getting a code delivered to a redirect URI the person was not shown
+- Storing unbounded data through the open registration endpoint
 - Reaching the host's private network or metadata endpoint through a tool
 - Taking the process down as one authenticated caller among many
 - Writing outside `GSC_REPORT_DIR`, or otherwise touching the host filesystem
@@ -75,8 +82,17 @@ failure rather than a surprise:
 - A session belongs to the user who opened it; another user's valid token gets
   `403`
 - `/authorize` stops at a consent page that names the requesting client and the
-  exact host that would receive the code, and warns when it is not a Claude
-  address. That page cannot be framed
+  full redirect URI that would receive the code, and warns unless that URI is a
+  documented Claude callback or loopback. The client's name is self-reported and
+  labelled unverified whenever the warning shows. That page cannot be framed
+- Completing the flow needs the HttpOnly cookie set when `/authorize` was
+  opened, so a consent approval or Google callback from a different browser is
+  refused
+- A registration is bounded: capped field and total size, at most ten redirect
+  URIs, and a ceiling on stored registrations that evicts never-used ones first.
+  Redirect URIs must be https, or http on loopback only; private-use schemes
+  such as `cursor://` are still accepted because desktop clients use them, and
+  are always shown in full with the warning
 - Revoking the Google grant erases the stored ciphertext rather than flagging it
 - `disconnect_account` leaves no row for that user in any table
 - `export_my_data` never returns the stored credential

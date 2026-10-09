@@ -20,12 +20,15 @@ import type { OAuthServerProvider, AuthorizationParams } from "@modelcontextprot
 import type { OAuthRegisteredClientsStore } from "@modelcontextprotocol/sdk/server/auth/clients.js";
 import type { AuthInfo } from "@modelcontextprotocol/sdk/server/auth/types.js";
 import type { OAuthClientInformationFull, OAuthTokenRevocationRequest, OAuthTokens } from "@modelcontextprotocol/sdk/shared/auth.js";
-import { InvalidGrantError, InvalidTokenError, InvalidTargetError, AccessDeniedError } from "@modelcontextprotocol/sdk/server/auth/errors.js";
+import {
+  InvalidGrantError, InvalidTokenError, InvalidTargetError, AccessDeniedError,
+  InvalidClientMetadataError, TemporarilyUnavailableError,
+} from "@modelcontextprotocol/sdk/server/auth/errors.js";
 
 import type { AuthDb } from "./db.js";
 import { newToken, sha256hex, vaultEncrypt, vaultDecrypt } from "./crypto.js";
 import type { GoogleIdentityLike } from "./google-identity.js";
-import { consentPage, redirectsAreRecognised } from "./consent.js";
+import { consentPage, redirectsAreRecognised, registrationProblem, withoutUnusedMetadata } from "./consent.js";
 import { authCookieHeader, browserTokenHash, browserTokenMatches, newBrowserToken } from "./browser-binding.js";
 
 const ACCESS_TTL_MS = 60 * 60 * 1000;            // 1 hour
@@ -33,6 +36,16 @@ const REFRESH_TTL_MS = 30 * 24 * 60 * 60 * 1000; // 30 days
 const CODE_TTL_MS = 60 * 1000;                   // 1 minute
 const PENDING_TTL_MS = 10 * 60 * 1000;           // consent-screen dwell time
 const CLIENT_TTL_MS = 7 * 24 * 60 * 60 * 1000;   // unused registrations are swept
+/** Upper bound on stored registrations; see makeRoomForRegistration. */
+const DEFAULT_MAX_REGISTERED_CLIENTS = 10_000;
+
+/**
+ * A registration that never produced a credential still in force. Shared by the
+ * age-based sweep and the capacity eviction so the two cannot disagree about
+ * what "unused" means.
+ */
+const UNUSED_CLIENT_SQL = `client_id NOT IN (SELECT DISTINCT client_id FROM access_tokens)
+          AND client_id NOT IN (SELECT DISTINCT client_id FROM refresh_tokens WHERE revoked = 0)`;
 
 /** The one scope this server issues; requests are normalised onto it. */
 export const MCP_SCOPE = "gsc:read";
@@ -48,6 +61,11 @@ export interface GscOAuthProviderOptions {
    * http://localhost rehearsal; any real deployment is https.
    */
   cookieSecure?: boolean;
+  /**
+   * Most client registrations kept at once. Registration is open to anyone, so
+   * without a ceiling the table is a free place to put data. Default 10,000.
+   */
+  maxRegisteredClients?: number;
 }
 
 export class GscOAuthProvider implements OAuthServerProvider {
@@ -56,6 +74,7 @@ export class GscOAuthProvider implements OAuthServerProvider {
   private readonly identity: GoogleIdentityLike;
   private readonly resourceUrl: string;
   private readonly cookieSecure: boolean;
+  private readonly maxRegisteredClients: number;
 
   constructor(opts: GscOAuthProviderOptions) {
     this.db = opts.db;
@@ -64,23 +83,63 @@ export class GscOAuthProvider implements OAuthServerProvider {
     // Normalise: no trailing slash, no hash — RFC 8707 comparisons are exact.
     this.resourceUrl = opts.resourceUrl.replace(/[#?].*$/, "").replace(/\/+$/, "");
     this.cookieSecure = opts.cookieSecure ?? true;
+    const cap = opts.maxRegisteredClients;
+    this.maxRegisteredClients = cap !== undefined && Number.isFinite(cap) && cap >= 1
+      ? Math.floor(cap)
+      : DEFAULT_MAX_REGISTERED_CLIENTS;
   }
 
   // ---- client registrations (DCR) ----------------------------------------
 
   get clientsStore(): OAuthRegisteredClientsStore {
     const db = this.db;
+    const makeRoom = () => this.makeRoomForRegistration();
     return {
       getClient(clientId: string): OAuthClientInformationFull | undefined {
         const row = db.prepare("SELECT data FROM oauth_clients WHERE client_id = ?").get(clientId) as { data: string } | undefined;
         return row ? (JSON.parse(row.data) as OAuthClientInformationFull) : undefined;
       },
       registerClient(client: OAuthClientInformationFull): OAuthClientInformationFull {
+        // Anyone may register, so this is where a registration is held to what a
+        // registration is. Throwing the SDK's error class matters: its handler
+        // turns that into a 400 invalid_client_metadata, and anything else into
+        // an opaque 500.
+        const stored = withoutUnusedMetadata(client);
+        const problem = registrationProblem(stored);
+        if (problem) throw new InvalidClientMetadataError(problem);
+        makeRoom();
         db.prepare("INSERT OR REPLACE INTO oauth_clients (client_id, data, created_at) VALUES (?, ?, ?)")
-          .run(client.client_id, JSON.stringify(client), Date.now());
-        return client;
+          .run(stored.client_id, JSON.stringify(stored), Date.now());
+        return stored;
       },
     };
+  }
+
+  /**
+   * Keeps the registrations table bounded without letting spam lock out real
+   * onboarding. At the ceiling it evicts the OLDEST registrations that never
+   * produced a credential, so a flood of junk displaces older junk rather than
+   * the genuine client that registered a minute ago; only when every row is in
+   * active use does it refuse, because then the ceiling is a capacity decision
+   * for the operator (GSC_MAX_REGISTERED_CLIENTS), not abuse.
+   *
+   * A registration evicted mid-flow fails at /authorize or /token and the person
+   * starts again — acceptable, and only reachable once the table is full.
+   */
+  private makeRoomForRegistration(): void {
+    const { n } = this.db.prepare("SELECT COUNT(*) AS n FROM oauth_clients").get() as { n: number };
+    const needed = n - this.maxRegisteredClients + 1;
+    if (needed <= 0) return;
+    // rowid breaks created_at ties, since registrations can share a millisecond.
+    const victims = this.db.prepare(
+      `SELECT client_id FROM oauth_clients WHERE ${UNUSED_CLIENT_SQL}
+        ORDER BY created_at ASC, rowid ASC LIMIT ?`
+    ).all(needed) as { client_id: string }[];
+    if (victims.length < needed) {
+      throw new TemporarilyUnavailableError("Client registration is temporarily unavailable. Try again later.");
+    }
+    const drop = this.db.prepare("DELETE FROM oauth_clients WHERE client_id = ?");
+    for (const v of victims) drop.run(v.client_id);
   }
 
   // ---- the sandwich -------------------------------------------------------
@@ -479,10 +538,7 @@ export class GscOAuthProvider implements OAuthServerProvider {
     // the table only ever grows and a hostile registration lives forever.
     // Anything old that never produced a token is dropped.
     this.db.prepare(
-      `DELETE FROM oauth_clients
-        WHERE created_at < ?
-          AND client_id NOT IN (SELECT DISTINCT client_id FROM access_tokens)
-          AND client_id NOT IN (SELECT DISTINCT client_id FROM refresh_tokens WHERE revoked = 0)`
+      `DELETE FROM oauth_clients WHERE created_at < ? AND ${UNUSED_CLIENT_SQL}`
     ).run(now - CLIENT_TTL_MS);
   }
 }
