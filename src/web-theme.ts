@@ -1,3 +1,5 @@
+import { ASSETS, GUIDES, PRODUCT_NAME } from "./site-content.js";
+
 /**
  * The visual language for this deployment's public pages, ported from k-o.pro.
  *
@@ -25,12 +27,18 @@ export const FONT_ROUTES = {
 export type FontFile = keyof typeof FONT_ROUTES;
 
 /**
- * Images, served from dist/img. Just the k-o.pro wordmark: a single black
+ * Images, served from dist/img. The k-o.pro wordmark is a single black
  * transparent PNG, flipped to white in dark mode with a CSS filter rather than
- * shipping a second file (see .site-logo).
+ * shipping a second file (see .site-logo). The rest are the icon set and the
+ * 1200x630 social card; their names carry a version because this route is
+ * served immutable, so a changed image has to ship under a new name.
  */
 export const IMAGE_ROUTES = {
   "k-o-pro.png": "image/png",
+  "og-card-v1.png": "image/png",
+  "icon-192-v1.png": "image/png",
+  "apple-touch-icon-v1.png": "image/png",
+  "favicon-v1.ico": "image/x-icon",
 } as const;
 
 export type ImageFile = keyof typeof IMAGE_ROUTES;
@@ -339,6 +347,41 @@ const COMPONENTS = `
 .faq h3{margin-top:0}
 .faq p:last-child{margin-bottom:0}
 .tool-name{font-family:var(--font-mono);font-size:.86em;white-space:nowrap}
+/* The product name's suffix sits under the h1's main line, smaller, so the
+   h1 carries the whole name without the display face wrapping awkwardly. */
+.h1-sub{display:block;font-family:var(--font-sans);font-weight:600;
+ font-size:clamp(1.05rem,2.4vw,1.35rem);letter-spacing:0;color:var(--muted-foreground);
+ margin-top:.6rem}
+.crumbs{font-size:.85rem;color:var(--muted-foreground);margin:0 0 1rem;padding:0;
+ list-style:none;display:flex;flex-wrap:wrap;gap:.35rem}
+.crumbs li{margin:0}
+.crumbs li + li::before{content:"/";margin-right:.35rem;opacity:.6}
+.crumbs a{color:inherit}
+/* Real tool output. No JavaScript is allowed here, so the expandable blocks on
+   the landing page are plain <details>, which needs none. */
+.example{margin:0 0 1.5rem}
+.example pre{max-height:26rem;overflow:auto}
+.example figcaption{margin:0 0 .6rem}
+.example .note{margin:.5rem 0 0}
+details.example-toggle{border:1px solid var(--border);border-radius:calc(var(--radius) - 6px);
+ padding:.75rem 1rem;margin:0 0 .75rem;background:var(--background)}
+details.example-toggle[open]{padding-bottom:1rem}
+details.example-toggle > summary{cursor:pointer;font-weight:700}
+details.example-toggle > summary .note{font-weight:400}
+details.example-toggle > .example{margin:1rem 0 0}
+.params td:first-child{white-space:nowrap}
+.tool-block{border-top:1px solid var(--border);padding-top:1.1rem;margin-top:1.4rem}
+.tool-block h3{margin-top:0}
+.ask{font-style:italic}
+.more{font-weight:700}
+.related{display:flex;flex-wrap:wrap;gap:.5rem;margin:0 0 1rem;padding:0;list-style:none}
+.related li{margin:0}
+.related a{display:inline-block;border:1px solid var(--border);border-radius:9999px;
+ padding:.3rem .85rem;font-size:.88rem;font-weight:600;text-decoration:none}
+.related a:hover{border-color:color-mix(in oklch,var(--brand) 45%,var(--border))}
+.byline{font-size:.92rem}
+.foot-label{font-size:.75rem;font-weight:700;letter-spacing:.09em;text-transform:uppercase;
+ margin:0 0 .5rem;color:color-mix(in oklch,var(--footer-foreground) 62%,transparent)}
 `;
 
 /** The GitHub mark, inline because `default-src 'none'` forbids <img>. */
@@ -409,6 +452,35 @@ export interface ShellOptions {
   jsonLd?: unknown[];
 }
 
+export interface Crumb {
+  label: string;
+  /** Omitted on the current page, which is not linked. */
+  path?: string;
+}
+
+/** The visible breadcrumb trail; pages pair it with breadcrumbJsonLd(). */
+export function crumbs(trail: Crumb[]): string {
+  const items = trail
+    .map((c) => (c.path ? `<li><a href="${esc(c.path)}">${esc(c.label)}</a></li>` : `<li aria-current="page">${esc(c.label)}</li>`))
+    .join("");
+  return `<ol class="crumbs" aria-label="Breadcrumb">${items}</ol>`;
+}
+
+/** BreadcrumbList for a trail, or nothing when there is no public origin to name. */
+export function breadcrumbJsonLd(trail: Crumb[], base: string | undefined, currentPath: string): unknown[] {
+  if (!base) return [];
+  return [{
+    "@context": "https://schema.org",
+    "@type": "BreadcrumbList",
+    itemListElement: trail.map((c, i) => ({
+      "@type": "ListItem",
+      position: i + 1,
+      name: c.label,
+      item: `${base}${c.path ?? currentPath}`,
+    })),
+  }];
+}
+
 /**
  * The origin to build absolute URLs from, or undefined when there isn't a
  * trustworthy one.
@@ -429,19 +501,32 @@ export function canonicalBase(publicUrl: string): string | undefined {
 }
 
 export function shell(o: ShellOptions): string {
-  // og:image is deliberately absent: there is no artwork for this service yet,
-  // and a card with a broken image is worse than a text-only one.
-  const social = o.canonical
+  // og:image needs an absolute URL, so like the canonical it is only emitted
+  // when the deployment has a real https origin to build one from.
+  const origin = o.canonical ? new URL(o.canonical).origin : undefined;
+  const social = o.canonical && origin
     ? [
         `<link rel="canonical" href="${esc(o.canonical)}">`,
         `<meta property="og:type" content="website">`,
-        `<meta property="og:site_name" content="Google Search Console MCP">`,
+        `<meta property="og:site_name" content="${esc(PRODUCT_NAME)}">`,
         `<meta property="og:title" content="${esc(o.title)}">`,
         o.description ? `<meta property="og:description" content="${esc(o.description)}">` : "",
         `<meta property="og:url" content="${esc(o.canonical)}">`,
-        `<meta name="twitter:card" content="summary">`,
+        `<meta property="og:image" content="${esc(origin + ASSETS.ogImage)}">`,
+        `<meta property="og:image:width" content="1200">`,
+        `<meta property="og:image:height" content="630">`,
+        `<meta property="og:image:alt" content="${esc(PRODUCT_NAME)}: 33 tools, read-only, every property, open source">`,
+        `<meta name="twitter:card" content="summary_large_image">`,
       ].filter(Boolean).join("")
     : "";
+
+  // Relative, so they work on any deployment. /favicon.ico is also served at
+  // the root for clients that request it without reading the markup.
+  const icons = [
+    `<link rel="icon" href="/favicon.ico" sizes="48x48">`,
+    `<link rel="icon" href="${ASSETS.icon192}" type="image/png" sizes="192x192">`,
+    `<link rel="apple-touch-icon" href="${ASSETS.appleTouchIcon}">`,
+  ].join("");
 
   // A <script> body is raw text, so HTML entities are NOT decoded inside it —
   // running this through esc() would emit `&quot;` and produce invalid JSON that
@@ -460,6 +545,7 @@ export function shell(o: ShellOptions): string {
     o.description ? `<meta name="description" content="${esc(o.description)}">` : "",
     o.noindex ? `<meta name="robots" content="noindex">` : "",
     social,
+    icons,
     `<style>${THEME_CSS}</style>`,
     structured,
   ].filter(Boolean).join("");
@@ -479,6 +565,11 @@ ${nav}
 </div></div></header>
 <main>${o.body}</main>
 <footer class="site-foot"><div class="wrap">
+<p class="foot-label">Guides</p>
+<ul class="foot-links">
+${GUIDES.map((g) => `<li><a href="${esc(g.path)}">${esc(g.label)}</a></li>`).join("\n")}
+</ul>
+<p class="foot-label">Project</p>
 <ul class="foot-links">
 <li><a href="/">Overview</a></li>
 <li><a href="/privacy">Privacy</a></li>
