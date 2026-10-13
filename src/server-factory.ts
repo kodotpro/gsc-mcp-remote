@@ -49,6 +49,7 @@ import { imagePageAudit } from "./tools/image-page-audit.js";
 import { listProperties } from "./tools/list-properties.js";
 import { resolveSiteUrl } from "./auth.js";
 import { getUserContext } from "./request-context.js";
+import { SERVER_VERSION } from "./version.js";
 
 const SITE_URL_PARAM = z
   .string()
@@ -58,7 +59,9 @@ const SITE_URL_PARAM = z
     "Defaults to the configured property. Call list_properties to see what this account can access."
   );
 
-export const SERVER_VERSION = "3.7.0";
+// Defined in version.ts so the public pages can show it without importing every
+// tool; re-exported here for the entry points that already read it from this file.
+export { SERVER_VERSION };
 
 export function createServer(): McpServer {
   const server = new McpServer({

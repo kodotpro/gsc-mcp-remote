@@ -21,6 +21,9 @@
  *  - / and /privacy render, and the anti-framing headers are present.
  *  - Every self-hosted font the pages reference is actually served, which is
  *    what catches a build or Dockerfile that stops copying them into dist/.
+ *  - Every page in the public-page registry is served, every internal link on
+ *    every page resolves, the trailing-slash duplicate of a page redirects to
+ *    it, and the sitemap and /llms.txt list exactly what is served.
  *
  * Run: node scripts/check-http.mjs
  */
@@ -28,6 +31,8 @@ import { spawn } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { formatStars, repoLink } from "../dist/web-theme.js";
 import { landingPage } from "../dist/web-pages.js";
+import { PUBLIC_PAGES, sitemapXml } from "../dist/web-guides.js";
+import { GUIDES, PRODUCT_NAME } from "../dist/site-content.js";
 
 const TOKEN = "smoke-test-token-not-a-secret-0123456789";
 const PORT = 20000 + Math.floor(Math.random() * 9000);
@@ -356,6 +361,90 @@ try {
   check("the install link carries the connector URL, encoded",
     published.includes("connectorUrl=https%3A%2F%2Fgsc.example.com%2Fmcp"),
     "claude.ai deep link missing or unencoded");
+
+  // The social card needs an absolute URL, so it rides on the same https
+  // gate as the canonical — and the file it names must actually be served.
+  const ogImage = published.match(/<meta property="og:image" content="([^"]+)"/)?.[1] ?? "";
+  check("a published deployment names an absolute social image",
+    ogImage.startsWith("https://gsc.example.com/img/"), ogImage || "no og:image");
+  check("the social card is announced as a large image",
+    published.includes('<meta name="twitter:card" content="summary_large_image">'));
+  if (ogImage) {
+    const res = await fetch(`${BASE}${new URL(ogImage).pathname}`);
+    check("the social image is served", res.ok && (res.headers.get("content-type") ?? "").startsWith("image/png"),
+      `got ${res.status} ${res.headers.get("content-type")}`);
+  }
+  check("no og:image is claimed without a public https origin", !/property="og:image"/.test(rootBody));
+  const publishedLd = [...published.matchAll(/<script type="application\/ld\+json">([\s\S]*?)<\/script>/g)]
+    .map((m) => JSON.parse(m[1]));
+  const software = publishedLd.find((d) => d["@type"] === "SoftwareApplication") ?? {};
+  check("the software is named by its product name in structured data", software.name === PRODUCT_NAME, software.name);
+  check("the structured data carries the running version", software.softwareVersion === health.version,
+    `${software.softwareVersion} vs ${health.version}`);
+  check("the structured data URL matches the canonical", software.url === "https://gsc.example.com/", software.url);
+
+  // -- the public-page registry ------------------------------------------------
+  // One registry feeds the routes, the sitemap and /llms.txt. These checks are
+  // what make "a page cannot exist without being listed" true rather than hoped.
+  const servedPaths = new Set(PUBLIC_PAGES.map((p) => p.path));
+  check("every guide in the footer is a registered page", GUIDES.every((g) => servedPaths.has(g.path)),
+    GUIDES.filter((g) => !servedPaths.has(g.path)).map((g) => g.path).join(", "));
+  const pageBodies = new Map();
+  for (const { path } of PUBLIC_PAGES) {
+    const res = await fetch(`${BASE}${path}`, { redirect: "manual" });
+    const body = await res.text();
+    pageBodies.set(path, body);
+    check(`GET ${path} serves a page`, res.status === 200 && /text\/html/.test(res.headers.get("content-type") ?? ""),
+      `got ${res.status}`);
+    check(`${path} has exactly one h1`, (body.match(/<h1[\s>]/g) ?? []).length === 1);
+    let ldOk = true;
+    for (const m of body.matchAll(/<script type="application\/ld\+json">([\s\S]*?)<\/script>/g)) {
+      try { JSON.parse(m[1]); } catch { ldOk = false; }
+    }
+    check(`${path} structured data parses`, ldOk);
+    const published = PUBLIC_PAGES.find((p) => p.path === path).render({
+      publicUrl: "https://gsc.example.com", perUserSignIn: true, repoUrl: REPO,
+    });
+    check(`${path} claims its own canonical when published`,
+      published.includes(`<link rel="canonical" href="https://gsc.example.com${path}">`));
+  }
+
+  // Every same-origin link on every page must resolve. A page renamed in one
+  // place and not another fails here instead of shipping a 404.
+  const internal = new Set();
+  for (const body of pageBodies.values()) {
+    for (const m of body.matchAll(/href="(\/[^"#?]*)/g)) internal.add(m[1]);
+  }
+  for (const href of internal) {
+    const res = await fetch(`${BASE}${href}`, { redirect: "manual" });
+    check(`internal link ${href} resolves`, res.status === 200, `got ${res.status}`);
+  }
+
+  // Express would otherwise serve /claude/ as a second copy of /claude.
+  const slash = await fetch(`${BASE}/claude/?ref=test`, { redirect: "manual" });
+  check("the trailing-slash duplicate of a page redirects permanently",
+    slash.status === 301 && slash.headers.get("location") === "/claude?ref=test",
+    `got ${slash.status} -> ${slash.headers.get("location")}`);
+  const mcpSlash = await fetch(`${BASE}/mcp/`, { redirect: "manual" });
+  check("/mcp/ is not caught by the page redirect", mcpSlash.status !== 301, `got ${mcpSlash.status}`);
+
+  const sitemap = sitemapXml("https://gsc.example.com");
+  const sitemapLocs = [...sitemap.matchAll(/<loc>https:\/\/gsc\.example\.com([^<]*)<\/loc>/g)].map((m) => m[1]);
+  check("the sitemap lists every public page and nothing else",
+    sitemapLocs.length === servedPaths.size && sitemapLocs.every((p) => servedPaths.has(p)),
+    sitemapLocs.join(", "));
+
+  const llms = await fetch(`${BASE}/llms.txt`);
+  const llmsBody = await llms.text();
+  check("/llms.txt is served as text", llms.ok && /text\/plain/.test(llms.headers.get("content-type") ?? ""),
+    `got ${llms.status} ${llms.headers.get("content-type")}`);
+  check("/llms.txt names the MCP endpoint", llmsBody.includes("/mcp "));
+  check("/llms.txt links every guide", GUIDES.every((g) => llmsBody.includes(`${g.path})`)),
+    GUIDES.filter((g) => !llmsBody.includes(`${g.path})`)).map((g) => g.path).join(", "));
+
+  const favicon = await fetch(`${BASE}/favicon.ico`);
+  check("/favicon.ico is served", favicon.ok && (favicon.headers.get("content-type") ?? "").startsWith("image/"),
+    `got ${favicon.status} ${favicon.headers.get("content-type")}`);
 
   // -- capacity limits -------------------------------------------------------
   const openSession = async () => {

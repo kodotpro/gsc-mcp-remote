@@ -72,7 +72,9 @@ A few things reviewers will look for:
 | `src/request-context.ts` | Per-request user context via `AsyncLocalStorage` |
 | `src/net-guard.ts` | SSRF classification and the bounded fetch |
 | `src/tools/` | One file per tool's implementation |
-| `src/web-pages.ts` | The public `/` and `/privacy` pages |
+| `src/web-pages.ts` | The public `/` and `/privacy` pages, and the pieces the guides share |
+| `src/web-guides.ts` | The guide pages, plus the page registry that routes, the sitemap and `/llms.txt` read |
+| `src/site-content.ts` | What the pages say: tool docs and defaults, real example output, FAQ |
 | `scripts/` | The four credential-free suites, plus the local OAuth rehearsal |
 
 `createServer()` is a factory rather than a singleton because
@@ -107,6 +109,9 @@ if it is not obvious. No strict convention beyond that.
 3. Update the expected counts in `scripts/check-tools.mjs`.
 4. Add it to the tool tables in the README, and bump the count in the heading,
    `package.json` and `manifest.json`.
+5. Document it in `src/site-content.ts`, in the right group, with its
+   parameters and defaults. `scripts/check-tools.mjs` fails until you do, and
+   fails again if a default you print stops matching the schema.
 
 ## Licence
 

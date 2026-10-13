@@ -1,4 +1,4 @@
-# Google Search Console MCP Server (Remote)
+# Google Search Console MCP Server - by k-o.pro (remote)
 
 **A Google Search Console Remote MCP server that answers SEO questions instead of returning API rows — across every property in your account. Connect it to Claude by URL and sign in with Google. Nothing to install.**
 
@@ -12,6 +12,8 @@ https://gsc.k-o.pro/mcp
 ```
 
 Paste that into Claude as a custom connector, sign in with your Google account, and ask *"which pages lost the most traffic last month, and why?"* — you get a diagnosis: a ranking loss, a CTR collapse, or a demand decline. Not a spreadsheet you still have to read.
+
+Guides on [gsc.k-o.pro](https://gsc.k-o.pro/): [claude.ai and Claude Desktop](https://gsc.k-o.pro/claude) · [Claude Code](https://gsc.k-o.pro/claude-code) · [AI Mode queries](https://gsc.k-o.pro/ai-mode-queries) · [self-hosting](https://gsc.k-o.pro/self-host)
 
 > **A fork with credit due.** The 29-tool foundation and the analysis logic behind it are [Suganthan Mohanadasan's](https://suganthan.com) work, from [Suganthan's GSC MCP](https://github.com/Suganthan-Mohanadasan/Suganthans-GSC-MCP). This fork adds multi-property access and remote hosting on top. See [Credits](#credits).
 
@@ -319,8 +321,8 @@ npm test
 
 | Suite | Covers |
 |---|---|
-| `check-tools.mjs` | Every tool registers over stdio; the right ones expose `site_url` |
-| `check-http.mjs` | Health, token enforcement, sessions, the capacity limits and their `Retry-After`, the idle sweeper, the public pages and their anti-framing headers, and that every self-hosted font the pages reference is actually served from `dist/` |
+| `check-tools.mjs` | Every tool registers over stdio; the right ones expose `site_url`; every tool and parameter default the public pages print matches the registered schema |
+| `check-http.mjs` | Health, token enforcement, sessions, the capacity limits and their `Retry-After`, the idle sweeper, the public pages and their anti-framing headers, that every self-hosted font the pages reference is actually served from `dist/`, and that every registered page is served, linked internally without a 404, listed in the sitemap and `/llms.txt`, and reachable at one URL only |
 | `check-oauth.mjs` | The sandwich, PKCE, single-use codes, refresh rotation and reuse-burning, audience binding, the revocation cascade, DCR, cross-user session rejection, and that `disconnect_account` leaves no row anywhere |
 | `check-hardening.mjs` | SSRF classification across 34 address forms, fetch deadlines and byte caps against a hostile server, redirect re-validation, report-path confinement, image format gating |
 
@@ -376,6 +378,10 @@ Not affiliated with or endorsed by Google or Anthropic. "Google" and "Google Sea
 ---
 
 ## Changelog
+
+**v3.8.0** — The public site grows from one page to a small set of guides, and the product gets one name everywhere: **Google Search Console MCP Server - by k-o.pro (remote)**, used verbatim in the page title, the h1, the structured data and this README. New pages: setup for [claude.ai and Claude Desktop](https://gsc.k-o.pro/claude) and [Claude Code](https://gsc.k-o.pro/claude-code), one page per tool group with every parameter's default, an [AI Mode queries](https://gsc.k-o.pro/ai-mode-queries) page for `genai_conversation_queries`, and [self-hosting](https://gsc.k-o.pro/self-host). The landing page adds real tool responses (captured from the hosted instance against k-o.pro and shown as returned, trimmed only where the caption says so), a comparison written as the questions to ask of any Search Console MCP server, a byline with version and date, and two answers people search for: no Google Cloud project is needed for the hosted instance, and Google does not list an official Search Console MCP server (checked 2026-10-13). Also new: a favicon set, a 1200×630 social card, `/llms.txt`, a `SoftwareApplication` schema with author, version, date and feature list, and per-page `TechArticle` and `BreadcrumbList` data.
+
+**One registry, so the site cannot drift.** Routes, the sitemap, `/llms.txt` and the footer all read the same page list in `src/web-guides.ts`, and `check-http.mjs` asserts every registered page is served, every internal link resolves, and the sitemap lists exactly what is served. Tool names, parameters and defaults live in `src/site-content.ts`, and `check-tools.mjs` now fails if a page documents a tool the server does not register, misses one it does, or prints a default the schema does not declare — the pages are written by hand, so this is what keeps them from going confidently wrong. The trailing-slash form of a page (`/claude/`) now answers 301 to the one canonical URL; Express would otherwise serve the same page twice, which the cannibalisation example on the diagnostics page shows costing k-o.pro. `/mcp/` is unaffected. `SERVER_VERSION` moved to `src/version.ts` so the pages can show it without importing every tool.
 
 **v3.7.0** — Closes the two account-takeover paths a production audit found, and puts a ceiling on the memory one account could consume.
 

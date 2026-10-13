@@ -34,7 +34,9 @@ Modifications in this fork (see README for detail):
     interstitial, session and rate limits, a row ceiling on Search Analytics
     pagination, report-path confinement, and user data deletion/export.
   - Serves its own public pages: a service description and a privacy policy,
-    which Google's OAuth verification requires on the callback's own domain.
+    which Google's OAuth verification requires on the callback's own domain,
+    plus setup and tool guides, /llms.txt and a sitemap, all generated from one
+    page registry.
   - Bounded Google API calls, browser-hardening headers on the authorization
     pages, magic-byte format gating before image parsing, and continuous
     replication of the token database.
