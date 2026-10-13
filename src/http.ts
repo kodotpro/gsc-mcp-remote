@@ -46,7 +46,8 @@ import { setRemoteMode } from "./runtime.js";
 import { runWithUserContext, type UserContext } from "./request-context.js";
 import { deniedPage } from "./auth/consent.js";
 import { AUTH_COOKIE, clearAuthCookieHeader, readCookie } from "./auth/browser-binding.js";
-import { landingPage, privacyPage, type SiteInfo } from "./web-pages.js";
+import { type SiteInfo } from "./web-pages.js";
+import { PUBLIC_PAGES, llmsTxt, sitemapXml } from "./web-guides.js";
 import { FONT_ROUTES, IMAGE_ROUTES, canonicalBase } from "./web-theme.js";
 import { currentStars, startStarPolling } from "./github-stars.js";
 
@@ -440,11 +441,45 @@ export async function startHttpServer(): Promise<HttpServer> {
   app.get("/fonts/:file", staticAsset("fonts", FONT_ROUTES));
   app.get("/img/:file", staticAsset("img", IMAGE_ROUTES));
 
-  app.get("/", (_req: Request, res: Response) => {
-    res.type("html").send(landingPage({ ...siteInfo, stars: currentStars() }));
+  // Browsers and some crawlers ask for /favicon.ico without reading the
+  // markup. Same file as the versioned one the pages link to, but this path
+  // never changes name, so it gets a day of cache rather than a year.
+  app.get("/favicon.ico", (_req: Request, res: Response) => {
+    res.type("image/x-icon");
+    res.setHeader("Cache-Control", "public, max-age=86400");
+    res.sendFile(path.join(__dirname, "img", "favicon-v1.ico"));
   });
-  app.get("/privacy", (_req: Request, res: Response) => {
-    res.type("html").send(privacyPage({ ...siteInfo, stars: currentStars() }));
+
+  /**
+   * Every public page, from one registry (web-guides.ts) that the sitemap and
+   * /llms.txt also read, so a page cannot be served without being listed.
+   *
+   * Express matches "/claude/" to the "/claude" route as well, which would put
+   * the same page at two URLs. Search Console data on k-o.pro shows what that
+   * costs — the trailing-slash pair split one query's impressions — so the
+   * slash variant of a known page answers 301 to the one canonical form.
+   * Scoped to the registered pages: /mcp/ must keep working as it is.
+   */
+  const pagePaths = new Set(PUBLIC_PAGES.map((p) => p.path));
+  app.use((req: Request, res: Response, next) => {
+    if ((req.method === "GET" || req.method === "HEAD") && req.path.length > 1 && req.path.endsWith("/")) {
+      const bare = req.path.replace(/\/+$/, "");
+      if (pagePaths.has(bare)) {
+        const query = req.originalUrl.slice(req.path.length);
+        res.redirect(301, bare + query);
+        return;
+      }
+    }
+    next();
+  });
+  for (const page of PUBLIC_PAGES) {
+    app.get(page.path, (_req: Request, res: Response) => {
+      res.type("html").send(page.render({ ...siteInfo, stars: currentStars() }));
+    });
+  }
+
+  app.get("/llms.txt", (_req: Request, res: Response) => {
+    res.type("text/plain; charset=utf-8").send(llmsTxt(siteInfo));
   });
 
   /**
@@ -465,13 +500,7 @@ export async function startHttpServer(): Promise<HttpServer> {
       res.status(404).type("text/plain").send("Not found");
       return;
     }
-    const urls = ["/", "/privacy"]
-      .map((p) => `<url><loc>${base}${p}</loc></url>`)
-      .join("");
-    res.type("application/xml").send(
-      `<?xml version="1.0" encoding="UTF-8"?>` +
-      `<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">${urls}</urlset>`
-    );
+    res.type("application/xml").send(sitemapXml(base));
   });
 
   // Unauthenticated liveness probe. Reveals nothing beyond "the process is up".

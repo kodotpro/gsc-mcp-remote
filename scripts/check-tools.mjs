@@ -7,10 +7,17 @@
  * Guards the specific regression this fork exists to fix: a tool quietly
  * losing its site_url parameter and silently falling back to one property.
  *
+ * It also pins the public pages to the server. Every tool the pages document
+ * must be registered, every registered tool must be documented, and every
+ * parameter default the pages print must be the default the schema declares.
+ * The pages are written by hand from server-factory.ts, so without this a
+ * changed default would leave them confidently wrong.
+ *
  * Run: node scripts/check-tools.mjs
  */
 import { spawn } from "node:child_process";
 import { createInterface } from "node:readline";
+import { PROPERTY_INDEPENDENT, TOOL_GROUPS, WRITE_TOOLS } from "../dist/site-content.js";
 
 // Must accept a site_url. Anything property-scoped belongs here.
 const NEEDS_SITE_URL = [
@@ -119,6 +126,43 @@ try {
     if (tool && tool.inputSchema?.properties?.site_url) {
       problems.push(`${name} unexpectedly gained a site_url parameter`);
     }
+  }
+
+  // -- the public pages against the registrations ------------------------
+  const documented = new Map(TOOL_GROUPS.flatMap((g) => g.tools).map((t) => [t.name, t]));
+  for (const name of WRITE_TOOLS) documented.set(name, null);
+  for (const name of byName.keys()) {
+    if (!documented.has(name)) problems.push(`${name} is registered but not documented in src/site-content.ts`);
+  }
+  for (const name of documented.keys()) {
+    if (!byName.has(name)) problems.push(`the pages document ${name}, which the server does not register`);
+  }
+  for (const [name, doc] of documented) {
+    const schema = byName.get(name)?.inputSchema;
+    if (!doc || !schema) continue;
+    for (const param of doc.params) {
+      const prop = schema.properties?.[param.name];
+      if (!prop) {
+        problems.push(`the pages document ${name}.${param.name}, which its schema does not have`);
+        continue;
+      }
+      if (param.value === "required") {
+        if (!(schema.required ?? []).includes(param.name)) {
+          problems.push(`the pages call ${name}.${param.name} required, but the schema does not`);
+        }
+        continue;
+      }
+      if (!("default" in prop)) continue; // a description such as "optional", not a default
+      const actual = typeof prop.default === "object" ? JSON.stringify(prop.default) : String(prop.default);
+      const matches = actual === param.value || (param.value === "none" && actual === "[]");
+      if (!matches) {
+        problems.push(`the pages print ${name}.${param.name} = ${param.value}, but the schema default is ${actual}`);
+      }
+    }
+  }
+  const pagesIndependent = [...PROPERTY_INDEPENDENT].sort().join(",");
+  if (pagesIndependent !== [...NO_SITE_URL].sort().join(",")) {
+    problems.push(`PROPERTY_INDEPENDENT in src/site-content.ts no longer matches NO_SITE_URL here`);
   }
 
   const expected = NEEDS_SITE_URL.length + NO_SITE_URL.length;
