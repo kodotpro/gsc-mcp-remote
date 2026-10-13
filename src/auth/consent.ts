@@ -84,6 +84,32 @@ export const REGISTRATION_LIMITS = {
   totalBytes: 8192,
 } as const;
 
+/**
+ * Schemes that can never be an application's OAuth callback: they either cannot
+ * carry a code to an app at all (file, blob, about, view-source, the websocket
+ * and ftp schemes) or hand it to a system handler such as a mail composer, a
+ * dialler or an Office/Windows URI handler (mailto, tel, sms, intent, ms-*).
+ * None has a legitimate use here, so refusing them removes a class of odd
+ * registrations without touching any real client.
+ *
+ * It is a list of what is refused, not of what is allowed, on purpose: desktop
+ * clients invent private-use schemes (cursor://, vscode://, claude://) and an
+ * allow-list would turn away each new one. That leaves it incomplete by nature;
+ * the control that does not depend on it is the consent page, which shows every
+ * unrecognised redirect in full with a warning. javascript:, data: and
+ * vbscript: are refused one layer earlier, by the SDK's own metadata schema.
+ */
+const NEVER_A_CALLBACK_SCHEMES = new Set([
+  "file", "blob", "about", "view-source", "ftp", "ftps", "ws", "wss",
+  "mailto", "tel", "sms", "smsto", "sip", "intent", "market", "search-ms",
+  "javascript", "data", "vbscript",
+]);
+
+function isNeverACallback(protocol: string): boolean {
+  const scheme = protocol.replace(/:$/, "").toLowerCase();
+  return NEVER_A_CALLBACK_SCHEMES.has(scheme) || scheme.startsWith("ms-");
+}
+
 /** Metadata this server never reads — it supports no private_key_jwt auth. */
 const UNUSED_FIELDS = ["jwks", "jwks_uri", "software_statement"] as const;
 const TEXT_FIELDS = [
@@ -109,8 +135,9 @@ export function withoutUnusedMetadata(client: OAuthClientInformationFull): OAuth
  * Redirect URIs follow the MCP authorization spec's communication-security
  * rule (https, or http only on loopback) with one deliberate gap: private-use
  * schemes such as cursor:// are still accepted, because desktop clients use
- * them. Those reach only an app on the person's own machine and are always
- * shown on the consent page with the full URI and a warning.
+ * them, minus the short list of schemes that can never be a callback. Those
+ * reach only an app on the person's own machine and are always shown on the
+ * consent page with the full URI and a warning.
  */
 export function registrationProblem(client: OAuthClientInformationFull): string | undefined {
   const L = REGISTRATION_LIMITS;
@@ -127,6 +154,9 @@ export function registrationProblem(client: OAuthClientInformationFull): string 
     }
     if (u.protocol === "http:" && !isLoopback(u)) {
       return "Redirect URIs must use https. Plain http is accepted only for localhost, 127.0.0.1 and [::1].";
+    }
+    if (isNeverACallback(u.protocol)) {
+      return `Redirect URIs cannot use the ${u.protocol} scheme. Use https, loopback http, or your application's own private-use scheme.`;
     }
   }
 

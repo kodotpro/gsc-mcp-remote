@@ -89,10 +89,11 @@ failure rather than a surprise:
   opened, so a consent approval or Google callback from a different browser is
   refused
 - A registration is bounded: capped field and total size, at most ten redirect
-  URIs, and a ceiling on stored registrations that evicts never-used ones first.
+  URIs, and a ceiling on stored registrations that evicts the oldest unused ones first and never a client that is partway through connecting.
   Redirect URIs must be https, or http on loopback only; private-use schemes
   such as `cursor://` are still accepted because desktop clients use them, and
-  are always shown in full with the warning
+  are always shown in full with the warning, apart from a short list that can
+  never be a callback (`file:`, `blob:`, `mailto:`, `ms-*:` and similar)
 - Revoking the Google grant erases the stored ciphertext rather than flagging it
 - `disconnect_account` leaves no row for that user in any table
 - `export_my_data` never returns the stored credential

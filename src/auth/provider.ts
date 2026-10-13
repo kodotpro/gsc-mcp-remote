@@ -40,12 +40,25 @@ const CLIENT_TTL_MS = 7 * 24 * 60 * 60 * 1000;   // unused registrations are swe
 const DEFAULT_MAX_REGISTERED_CLIENTS = 10_000;
 
 /**
- * A registration that never produced a credential still in force. Shared by the
- * age-based sweep and the capacity eviction so the two cannot disagree about
- * what "unused" means.
+ * SQL for "a registration nobody is using": no access token, no live refresh
+ * token, and no flow in progress — an unexpired pending authorization or an
+ * unredeemed authorization code. Shared by the age-based sweep and the capacity
+ * eviction so the two cannot disagree about what "unused" means.
+ *
+ * The in-progress clauses matter for the eviction. Oldest-first already keeps a
+ * fresh registration last in line, but "last in line" is only probable; with
+ * these clauses a client that is partway through connecting cannot be evicted
+ * out from under the person doing it, whatever the registration rate. `now` is
+ * a number from Date.now() (never caller input), so it is inlined rather than
+ * bound, which keeps the fragment reusable inside both queries' own parameters.
  */
-const UNUSED_CLIENT_SQL = `client_id NOT IN (SELECT DISTINCT client_id FROM access_tokens)
-          AND client_id NOT IN (SELECT DISTINCT client_id FROM refresh_tokens WHERE revoked = 0)`;
+const unusedClientSql = (now: number): string => {
+  const t = Math.trunc(now);
+  return `client_id NOT IN (SELECT DISTINCT client_id FROM access_tokens)
+          AND client_id NOT IN (SELECT DISTINCT client_id FROM refresh_tokens WHERE revoked = 0)
+          AND client_id NOT IN (SELECT DISTINCT client_id FROM pending_authorizations WHERE expires_at > ${t})
+          AND client_id NOT IN (SELECT DISTINCT client_id FROM auth_codes WHERE used = 0 AND expires_at > ${t})`;
+};
 
 /** The one scope this server issues; requests are normalised onto it. */
 export const MCP_SCOPE = "gsc:read";
@@ -117,14 +130,13 @@ export class GscOAuthProvider implements OAuthServerProvider {
 
   /**
    * Keeps the registrations table bounded without letting spam lock out real
-   * onboarding. At the ceiling it evicts the OLDEST registrations that never
-   * produced a credential, so a flood of junk displaces older junk rather than
-   * the genuine client that registered a minute ago; only when every row is in
-   * active use does it refuse, because then the ceiling is a capacity decision
-   * for the operator (GSC_MAX_REGISTERED_CLIENTS), not abuse.
-   *
-   * A registration evicted mid-flow fails at /authorize or /token and the person
-   * starts again — acceptable, and only reachable once the table is full.
+   * onboarding. At the ceiling it evicts the OLDEST registrations nobody is
+   * using, so a flood of junk displaces older junk rather than the genuine
+   * client that registered a minute ago. "Using" includes a flow in progress
+   * (see unusedClientSql), so a person partway through connecting is never cut
+   * off. Only when every row is in use does it refuse, because then the ceiling
+   * is a capacity decision for the operator (GSC_MAX_REGISTERED_CLIENTS), not
+   * abuse.
    */
   private makeRoomForRegistration(): void {
     const { n } = this.db.prepare("SELECT COUNT(*) AS n FROM oauth_clients").get() as { n: number };
@@ -132,7 +144,7 @@ export class GscOAuthProvider implements OAuthServerProvider {
     if (needed <= 0) return;
     // rowid breaks created_at ties, since registrations can share a millisecond.
     const victims = this.db.prepare(
-      `SELECT client_id FROM oauth_clients WHERE ${UNUSED_CLIENT_SQL}
+      `SELECT client_id FROM oauth_clients WHERE ${unusedClientSql(Date.now())}
         ORDER BY created_at ASC, rowid ASC LIMIT ?`
     ).all(needed) as { client_id: string }[];
     if (victims.length < needed) {
@@ -538,7 +550,7 @@ export class GscOAuthProvider implements OAuthServerProvider {
     // the table only ever grows and a hostile registration lives forever.
     // Anything old that never produced a token is dropped.
     this.db.prepare(
-      `DELETE FROM oauth_clients WHERE created_at < ? AND ${UNUSED_CLIENT_SQL}`
+      `DELETE FROM oauth_clients WHERE created_at < ? AND ${unusedClientSql(now)}`
     ).run(now - CLIENT_TTL_MS);
   }
 }

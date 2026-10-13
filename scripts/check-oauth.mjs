@@ -196,6 +196,20 @@ rejects("registration: an oversized free-text field is refused", mk({ scope: "s"
 rejects("registration: plain http to a remote host is refused", mk({ redirect_uris: ["http://remote-host.example.com/cb"] }), "https");
 rejects("registration: http to a look-alike of localhost is refused", mk({ redirect_uris: ["http://localhost.attacker.example/cb"] }), "https");
 
+// Schemes that can never be an app's callback: no code reaches an app through
+// them, or they hand it to a system handler. Reproduced against the previous
+// code, which accepted every one of these.
+for (const u of ["file:///etc/passwd", "blob:https://a.example/uuid", "about:blank", "ftp://a.example/cb", "ws://a.example/cb", "wss://a.example/cb",
+                 "mailto:a@b.example", "tel:+15551234567", "sms:+15551234567", "intent://x#Intent;scheme=a;end", "view-source:https://a.example",
+                 "ms-word:ofe|u|https://a.example/x", "MS-EXCEL:ofe|u|https://a.example/x", "search-ms:query=x"]) {
+  rejects(`registration: the ${u.split(":")[0]}: scheme is refused`, mk({ redirect_uris: [u] }), "scheme");
+}
+// ...while the private-use schemes real desktop clients use keep working.
+for (const [name, u] of [["Cursor", "cursor://anysphere.cursor-retrieval/oauth/gsc/callback"], ["VS Code", "vscode://vscode.mcp/callback"], ["Claude", "claude://callback"],
+                         ["a browser extension", "chrome-extension://abcdefghijklmnop/cb"], ["a reverse-DNS app", "com.example.app:/oauth2redirect"]]) {
+  accepts(`registration: ${name}'s private-use scheme still works`, mk({ client_name: name, redirect_uris: [u] }));
+}
+
 // Unused metadata is dropped rather than stored and echoed.
 const withJunk = mk({ client_name: "junk", jwks: { keys: ["k".repeat(20_000)] }, software_statement: "z".repeat(20_000) });
 accepts("registration: unused jwks/software_statement do not cause a refusal", withJunk);
@@ -244,6 +258,55 @@ try {
   check("a full table of in-use clients refuses rather than evicting them", e instanceof TemporarilyUnavailableError, `${e?.constructor?.name}: ${e?.message}`);
 }
 check("refusing evicts nothing", JSON.stringify(ids()) === JSON.stringify(["b", "c", "d"]), ids().join(","));
+
+// A client that is partway through connecting must not be evicted, however old
+// its registration is. Reproduced: with the previous predicate a client with a
+// live pending authorization was the oldest "unused" row and was deleted,
+// orphaning the pending row.
+const flowDb = openAuthDb(path.join(tmp, "flow.db"));
+const flowProvider = new GscOAuthProvider({ db: flowDb, vaultKey, identity: fakeIdentity, resourceUrl: RESOURCE, maxRegisteredClients: 3 });
+const flowIds = () => flowDb.prepare("SELECT client_id FROM oauth_clients ORDER BY rowid").all().map((r) => r.client_id);
+for (const id of ["mid-flow", "j1", "j2"]) flowProvider.clientsStore.registerClient(mk({ client_id: id }));
+await flowProvider.authorize(flowProvider.clientsStore.getClient("mid-flow"), { codeChallenge: challenge, redirectUri: "http://127.0.0.1:41419/callback", scopes: [] }, mockRes());
+flowProvider.clientsStore.registerClient(mk({ client_id: "j3" }));
+check("a client with a live pending authorization is not evicted, though it is the oldest",
+  flowIds().includes("mid-flow") && !flowIds().includes("j1"), flowIds().join(","));
+check("the eviction took the oldest client that was NOT in use instead", JSON.stringify(flowIds()) === JSON.stringify(["mid-flow", "j2", "j3"]), flowIds().join(","));
+
+// An unredeemed authorization code is also a flow in progress; a redeemed one is not.
+flowDb.prepare("INSERT INTO auth_codes (code_hash, client_id, user_id, code_challenge, redirect_uri, scopes, resource, expires_at, used) VALUES ('c-live', 'j2', 'u', 'x', 'http://127.0.0.1:1/', 'gsc:read', NULL, ?, 0)").run(Date.now() + 60_000);
+flowProvider.clientsStore.registerClient(mk({ client_id: "j4" }));
+check("a client with an unredeemed authorization code is not evicted", flowIds().includes("j2") && !flowIds().includes("j3"), flowIds().join(","));
+flowDb.prepare("UPDATE auth_codes SET used = 1 WHERE code_hash = 'c-live'").run();
+flowDb.prepare("UPDATE pending_authorizations SET expires_at = ?").run(Date.now() - 1);
+flowProvider.clientsStore.registerClient(mk({ client_id: "j5" }));
+check("once its flow has ended (code redeemed, pending expired) a client is evictable again", !flowIds().includes("mid-flow"), flowIds().join(","));
+
+// When every row is mid-flow there is nothing to evict: refuse, and lose nothing.
+const fullDb = openAuthDb(path.join(tmp, "full.db"));
+const fullProvider = new GscOAuthProvider({ db: fullDb, vaultKey, identity: fakeIdentity, resourceUrl: RESOURCE, maxRegisteredClients: 2 });
+for (const id of ["p1", "p2"]) {
+  fullProvider.clientsStore.registerClient(mk({ client_id: id }));
+  await fullProvider.authorize(fullProvider.clientsStore.getClient(id), { codeChallenge: challenge, redirectUri: "http://127.0.0.1:41419/callback", scopes: [] }, mockRes());
+}
+try {
+  fullProvider.clientsStore.registerClient(mk({ client_id: "p3" }));
+  check("a table where every client is mid-flow refuses rather than evicting", false, "was accepted");
+} catch (e) {
+  check("a table where every client is mid-flow refuses rather than evicting", e instanceof TemporarilyUnavailableError, `${e?.constructor?.name}: ${e?.message}`);
+}
+check("refusing left both mid-flow clients in place", fullDb.prepare("SELECT COUNT(*) n FROM oauth_clients").get().n === 2);
+
+// The age-based sweep shares the definition: an old registration with a live flow survives it.
+const sweepDb = openAuthDb(path.join(tmp, "sweep.db"));
+const sweepProvider = new GscOAuthProvider({ db: sweepDb, vaultKey, identity: fakeIdentity, resourceUrl: RESOURCE });
+sweepProvider.clientsStore.registerClient(mk({ client_id: "old-idle" }));
+sweepProvider.clientsStore.registerClient(mk({ client_id: "old-flowing" }));
+await sweepProvider.authorize(sweepProvider.clientsStore.getClient("old-flowing"), { codeChallenge: challenge, redirectUri: "http://127.0.0.1:41419/callback", scopes: [] }, mockRes());
+sweepDb.prepare("UPDATE oauth_clients SET created_at = ?").run(Date.now() - 30 * 24 * 60 * 60 * 1000);
+sweepProvider.cleanupExpired();
+check("the sweep drops an old idle registration", !sweepProvider.clientsStore.getClient("old-idle"));
+check("the sweep keeps an old registration that has a live flow", Boolean(sweepProvider.clientsStore.getClient("old-flowing")));
 
 // ---------------------------------------------------------------------------
 // Browser binding. These assertions replace one that USED to read
