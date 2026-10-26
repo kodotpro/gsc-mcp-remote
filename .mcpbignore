@@ -1,21 +1,24 @@
 # Keep the desktop bundle to runtime files only:
 # dist/, production node_modules, package.json, manifest.json, LICENSE, NOTICE
-src/
-scripts/
-docs/
-data/
-secrets/
-.github/
-Dockerfile
-docker-compose.yml
-.dockerignore
-.env
-.env.example
-tsconfig.json
-package-lock.json
-.gitignore
-.git/
-.claude/
+# Anchored with a leading slash: an unanchored `src/` or `scripts/` also
+# matches the same-named directory inside node_modules (googleapis ships its
+# code in build/src/), which left a bundle that could not start.
+/src/
+/scripts/
+/docs/
+/data/
+/secrets/
+/.github/
+/Dockerfile
+/docker-compose.yml
+/.dockerignore
+/.env
+/.env.example
+/tsconfig.json
+/package-lock.json
+/.gitignore
+/.git/
+/.claude/
 *.mcpb
 
 # dev dependencies (not needed at runtime)
