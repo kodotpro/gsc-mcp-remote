@@ -1,7 +1,7 @@
 {
   "name": "gsc-mcp-remote",
   "version": "3.8.0",
-  "description": "Google Search Console MCP server for Claude \u2014 connect by URL at https://gsc.k-o.pro/mcp and sign in with Google, or run it locally. 33 SEO analysis tools across every property in your account: quick wins, traffic-drop diagnosis, content decay, cannibalisation, CTR opportunities, multi-site dashboards and a full image-search suite. Per-user MCP OAuth (PKCE, DCR) so a team shares one deployment and each person sees only their own properties.",
+  "description": "Google Search Console MCP server for Claude — connect by URL at https://gsc.k-o.pro/mcp and sign in with Google, or run it locally. 33 SEO analysis tools across every property in your account: quick wins, traffic-drop diagnosis, content decay, cannibalisation, CTR opportunities, multi-site dashboards and a full image-search suite. Per-user MCP OAuth (PKCE, DCR) so a team shares one deployment and each person sees only their own properties.",
   "main": "dist/index.js",
   "bin": {
     "gsc-mcp-remote": "dist/index.js"
@@ -58,7 +58,7 @@
     "googleapis": "^176.0.0",
     "node-html-parser": "^9.0.1",
     "open": "^10.1.0",
-    "zod": "^3.24.0"
+    "zod": "^4.6.7"
   },
   "devDependencies": {
     "@types/express": "^5.0.6",
