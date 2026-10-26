@@ -2,6 +2,7 @@
 
 **A Google Search Console Remote MCP server that answers SEO questions instead of returning API rows — across every property in your account. Connect it to Claude by URL and sign in with Google. Nothing to install.**
 
+[![build](https://github.com/kodotpro/gsc-mcp-remote/actions/workflows/build.yml/badge.svg)](https://github.com/kodotpro/gsc-mcp-remote/actions/workflows/build.yml)
 [![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
 [![Node](https://img.shields.io/badge/node-%E2%89%A518-brightgreen.svg)](#run-it-on-your-own-machine)
 [![MCP](https://img.shields.io/badge/MCP-Streamable%20HTTP%20%2B%20stdio-orange.svg)](https://modelcontextprotocol.io)
@@ -76,7 +77,9 @@ The server is hosted at **`https://gsc.k-o.pro/mcp`**. There is nothing to downl
 
 ### claude.ai and Claude Desktop
 
-**Settings → Connectors → Add custom connector**, then paste:
+[**Add to Claude**](https://claude.ai/customize/connectors?modal=add-custom-connector&connectorName=Google+Search+Console&connectorUrl=https%3A%2F%2Fgsc.k-o.pro%2Fmcp) opens claude.ai with the connector pre-filled; you confirm the address before anything connects.
+
+Or by hand: **Settings → Connectors → Add custom connector**, then paste:
 
 ```
 https://gsc.k-o.pro/mcp
@@ -101,11 +104,7 @@ Then you are connected. Ask:
 
 and go from there. Google's own Search Console permissions decide what you can see — this server cannot show you a property Google would not, and it never gains write access to anything.
 
-### While it is in beta
-
-Google requires an app to be verified before it can offer this kind of sign-in to the general public, and verification takes weeks. Until it completes, Google itself limits sign-in to accounts on an approved list (100 maximum). If sign-in fails with `access_denied`, that is why — [open an issue](https://github.com/kodotpro/gsc-mcp-remote/issues) to ask for access, and you will be added.
-
-If you would rather not wait, or would rather your Google token never left your own machine, [run it locally](#run-it-on-your-own-machine) — it is the same 33 tools.
+If you would rather your Google token never left your own machine, [run it locally](#run-it-on-your-own-machine) — it is the same 33 tools.
 
 ### Leaving
 
@@ -130,7 +129,8 @@ Tools marked **P** take an optional `site_url` to target any property your crede
 |------|-----------------|---|
 | `list_properties` | Which properties this account can access, and which is the default | |
 | `multi_site_dashboard` | Health check across many properties at once (takes `site_urls`) | |
-| `set_default_property` | Save your own default property (hosted per-user mode) | |
+| `list_sitemaps` | Submitted sitemaps with status, errors, indexed counts | P |
+| `set_default_property` | Save your own default property (hosted per-user mode) | P |
 | `export_my_data` | Everything the server stores about you (hosted mode) | |
 | `disconnect_account` | Erase it all and end your sessions (hosted mode) | |
 
@@ -172,13 +172,12 @@ These pass `type=image` to the Search Analytics API — a surface most third-par
 | `image_content_decay` | Image-search decay across three windows | P |
 | `image_page_audit` | Fetches your pages and audits every on-page image factor | |
 
-### Indexing and sitemaps
+### Indexing and sitemaps (write tools)
 
-Require `GSC_SCOPES=full`, and are unavailable in hosted per-user mode.
+These change something in Google, so they require `GSC_SCOPES=full` and are unavailable in hosted per-user mode, which requests the read-only scope only. Hosted mode runs the other 30 tools.
 
-| Tool | What it answers | P |
-|------|-----------------|---|
-| `list_sitemaps` | Submitted sitemaps with status, errors, indexed counts | P |
+| Tool | What it does | P |
+|------|--------------|---|
 | `submit_sitemap` | Notify Google of a new or updated sitemap | P |
 | `submit_url` | Submit one URL to the Indexing API | |
 | `submit_batch` | Submit up to 200 URLs at once | |
@@ -336,7 +335,7 @@ Using the hosted instance:
 
 | Symptom | Cause |
 |---|---|
-| `access_denied` from Google | Your account is not yet on the approved list. See [While it is in beta](#while-it-is-in-beta) |
+| `access_denied` from Google | Consent was declined or blocked: you pressed Cancel, or your Google Workspace admin restricts third-party apps. Try again, or ask your admin to allow the app |
 | The connector UI rejects the URL | Check it is exactly `https://gsc.k-o.pro/mcp`. Both `/mcp` and `/mcp/` work |
 | "This session belongs to a different user" | A stale connector entry. Remove and re-add it |
 | A tool says a property is not available | Google's own permissions apply. Confirm the account you signed in with has access in Search Console itself |
@@ -381,33 +380,7 @@ Not affiliated with or endorsed by Google or Anthropic. "Google" and "Google Sea
 
 **v3.8.0** — The public site grows from one page to a small set of guides, and the product gets one name everywhere: **Google Search Console MCP Server - by k-o.pro (remote)**, used verbatim in the page title, the h1, the structured data and this README. New pages: setup for [claude.ai and Claude Desktop](https://gsc.k-o.pro/claude) and [Claude Code](https://gsc.k-o.pro/claude-code), one page per tool group with every parameter's default, an [AI Mode queries](https://gsc.k-o.pro/ai-mode-queries) page for `genai_conversation_queries`, and [self-hosting](https://gsc.k-o.pro/self-host). The landing page adds real tool responses (captured from the hosted instance against k-o.pro and shown as returned, trimmed only where the caption says so), a comparison written as the questions to ask of any Search Console MCP server, a byline with version and date, and two answers people search for: no Google Cloud project is needed for the hosted instance, and Google does not list an official Search Console MCP server (checked 2026-10-13). Also new: a favicon set, a 1200×630 social card, `/llms.txt`, a `SoftwareApplication` schema with author, version, date and feature list, and per-page `TechArticle` and `BreadcrumbList` data.
 
-**One registry, so the site cannot drift.** Routes, the sitemap, `/llms.txt` and the footer all read the same page list in `src/web-guides.ts`, and `check-http.mjs` asserts every registered page is served, every internal link resolves, and the sitemap lists exactly what is served. Tool names, parameters and defaults live in `src/site-content.ts`, and `check-tools.mjs` now fails if a page documents a tool the server does not register, misses one it does, or prints a default the schema does not declare — the pages are written by hand, so this is what keeps them from going confidently wrong. The trailing-slash form of a page (`/claude/`) now answers 301 to the one canonical URL; Express would otherwise serve the same page twice, which the cannibalisation example on the diagnostics page shows costing k-o.pro. `/mcp/` is unaffected. `SERVER_VERSION` moved to `src/version.ts` so the pages can show it without importing every tool.
-
-**v3.7.0** — Closes the two account-takeover paths a production audit found, and puts a ceiling on the memory one account could consume.
-
-**The authorization flow is now bound to one browser.** Two distinct takeovers shared a root cause: the only authority advancing a flow was a server-minted string, and every such string is obtainable by an attacker who simply starts their own `/authorize`. The worse of the two never touched this server from the attacker's page at all — the `state` handed to Google *was* the pending-authorization id, and the callback looked the row up by that alone, so an attacker could approve consent in their own browser, mail a victim a plain link to `accounts.google.com`, and have the victim's Google account bound to the attacker's client, PKCE challenge and redirect URI. The victim's only visible artefact was a genuine Google screen for this very app. No form-level token could have helped, because no form was involved. Now `/authorize` sets one `HttpOnly`, `SameSite=Lax` cookie scoped to `/oauth`, stores its hash on the pending row, and **requires it at both the consent POST and the Google callback**; the state sent to Google is an independent random value. `SameSite=Lax` is exactly right here: it still travels on Google's top-level GET return, but not on a cross-site POST, which is what makes the consent page refusable rather than forgeable. The callback checks the binding *before* consuming the pending row, so one stray request cannot destroy a flow the correct browser could still finish. The privacy page now discloses the cookie — a test pins that disclosure to the code, because a page claiming otherwise would be a false statement to a reviewer. `pending_authorizations` gains two columns and is rebuilt in place on first boot; users, vaulted Google tokens and live sessions are untouched.
-
-**And the test that asserted the vulnerability is gone.** `scripts/check-oauth.mjs` used to assert `state === pending_id` — it pinned the vulnerable design as correct and passed throughout. It now asserts the attacks *fail*: approving without the cookie, approving with another flow's cookie, completing the Google leg from a different browser, and the same over real HTTP. That test immediately caught a flaw in the fix itself (the row was consumed before the binding was checked), which is the whole point.
-
-**Memory has a ceiling.** `image_page_audit` buffered up to 20 MB per image off-heap with no concurrency cap: 8 concurrent calls measured 444 MB RSS against a 512 MB container limit, and 8 is exactly one user's session quota — one account could OOM-kill every other tenant, while `heapUsedPercent` read 2.1% because the bytes were off-heap. Now: process-wide limiters on outbound fetches (3) and Search Analytics queries (6), acquired at the leaf so `generate_report` cannot deadlock waiting on its own sub-tools, with a bounded queue that sheds load rather than growing past the client's own timeout; `GSC_MAX_IMAGE_BYTES` down to 3 MB; `max_images_per_page` clamped to 50; and the `Buffer.concat` that made every download cost twice its size replaced by one preallocated buffer, with a copy-out for small bodies so a 2 KB favicon no longer pins 3 MB. `/healthz` now reports `rssMb` against the cgroup's own `containerLimitMb`, plus `externalMb` and live limiter saturation — and both the code comment and the self-hosting doc are corrected, because they previously pointed operators at the one number that stayed calm while the container died.
-
-**v3.6.0** — Removes the last dependency advisory rather than living with it. `image-size` carried two unpatched high-severity denial-of-service bugs (CVE-2025-71330 in the ICNS reader, CVE-2025-71329 in JXL and HEIF): a zero-valued length or box-size field left a loop's offset unadvanced, spinning forever. I reproduced it — a 32-byte crafted ICNS buffer hung the parser until the process was killed — and because that loop is synchronous, no timeout can interrupt it, so one hostile image reaching `image_page_audit` would take down every user of a hosted instance. There is still no fixed release. Since dimensions were only ever needed for the raster formats the audit already identifies by magic bytes, `src/image-dimensions.ts` now reads width and height from the header directly: JPEG, PNG, GIF, WebP (all three encodings), BMP, TIFF (both byte orders) and SVG. Every scan is bounded by an explicit length check and a hard iteration cap, and a zero-valued field ends the scan instead of failing to advance. `npm audit` reports zero vulnerabilities, the dependency is gone from the tree, and CI's advisory gate tightened from `critical` to `high` now that nothing is knowingly carried. Twelve formats are asserted to measure correctly and thirteen hostile shapes — including the exact CVE payloads — to return null promptly. Also adds an explicit read-only `permissions` block to the CI workflow, which CodeQL had flagged.
-
-**v3.5.0** — Capacity tuning, from measuring rather than guessing. The Search Analytics row ceiling now defaults to **25,000** instead of 100,000. Measured against the container's 384 MB heap, 100,000 rows cost ~24 MB as objects plus ~44 MB transient while the tool serialises its result — roughly 68 MB for one query, so four concurrent ones came within reach of the ceiling. At 25,000 the same query costs ~17 MB all-in, four times the headroom, and it shortens the event-loop stall that serialising a large payload causes on a shared vCPU. Google's own per-page maximum is 25,000, so this is still more than an analysis question needs, and truncation was always reported rather than hidden — raise `GSC_MAX_TOTAL_ROWS` on a box with memory to spare. `/healthz` now also reports process memory (heap used, the real V8 ceiling, the percentage between them, RSS) plus the row ceiling in force, so pressure can be watched instead of inferred; `heapUsedPercent` is the number worth alerting on.
-
-**v3.4.1** — Fixes a dead "Continue to Google" button in per-user mode, introduced by v3.4.0's security headers. The consent form posts to `/oauth/consent` on the server's own origin, and that route answers `302` to `accounts.google.com` — but browsers apply `form-action` across the whole navigation, so `form-action 'self'` aborted the submission before it left the browser. Clicking the button did nothing at all, with only a CSP violation in the console to say why. `form-action` now lists Google explicitly, which is the only cross-origin navigation any form here performs. The test that should have caught this asserted the presence of `form-action 'self'` — the exact string that was wrong — so it passed throughout; it now checks that whatever host the consent POST actually redirects to is permitted by that same page's `form-action`, read from the live `Location` header rather than a hardcoded hostname. Both suites fail on the old header and pass on the new one.
-
-**v3.4.0** — Follow-through on the v3.3.0 audit, plus the pieces a public deployment needs. **A regression in v3.3.0 is fixed:** the session caps applied the *per-user* ceiling to the whole server in bearer mode, because bearer requests carry no identity and every session's owner was therefore `null` — a single-tenant deployment stopped at 8 concurrent sessions while `/healthz` advertised 120. Bearer mode is now bounded by `GSC_MAX_SESSIONS` alone, `/healthz` reports the limits actually in force, and the HTTP suite pins all of it. **Dependencies:** eight of nine advisories cleared, and the MCP SDK moved to 1.30. The ninth, `image-size`, had no fixed release and unpatched infinite loops in its ICNS, JXL and HEIF readers; because that loop is synchronous no timeout can interrupt it, so `image_page_audit` decides an image's format from its own magic bytes — never from an attacker-controlled `Content-Type` — and refused to hand those families to the parser at all. (The dependency was removed outright in v3.6.0.) **Google calls are now bounded** by `GSC_GOOGLE_TIMEOUT_MS`. **New public pages** at `/` and `/privacy`, served by the server itself, because Google's sensitive-scope verification requires a home page and a privacy policy on the callback's own domain; the test suite asserts the claims the policy makes are the ones the code keeps. The consent interstitial and both pages now carry `X-Frame-Options: DENY` and a `default-src 'none'` CSP. **Continuous backups** via an opt-in Litestream sidecar, with the vault key deliberately excluded from replication. **Regression tests for everything v3.3.0 shipped untested:** the session ceiling and its `503`, the rate limit and its `429`, both `Retry-After` headers, the idle sweeper, and the deletion/export guarantees. And `scripts/try-oauth-local.mjs` rehearses a real Google sign-in on `http://localhost` against a throwaway database.
-
-**v3.3.0** — Security and resource hardening, from a production-readiness audit of v3.2.0 (seven independent reviewers, every finding adversarially verified). The SSRF guard missed IPv4-mapped IPv6 entirely: `http://[::ffff:127.0.0.1]/` normalises to the hex form `::ffff:7f00:1`, which the dotted-decimal check never matched, so loopback and the cloud metadata endpoint were both reachable from the hosted server. Address classification now works on expanded 16-bit groups. All fetching moved behind one helper that owns the whole request: the deadline now covers the response body, bytes are capped while streaming, addresses are re-validated at connect time, and every redirect hop is re-checked. `/authorize` gained the consent interstitial. Session and rate limits stop one caller exhausting the heap. Search Analytics pagination gained a row ceiling. `generate_report` writes only inside `GSC_REPORT_DIR`. New `disconnect_account` and `export_my_data` make the deletion and access controls the documentation described actually exist. `multi_site_dashboard` no longer throws when `GSC_SITE_URL` is unset — it was broken for exactly the multi-property configuration this fork exists to support. `submit_url`/`submit_batch` refuse to run in hosted per-user mode.
-
-**v3.2.0** — Per-user Google sign-in. `GSC_HTTP_AUTH=oauth` turns the remote server into a full MCP OAuth authorization + resource server (discovery metadata, dynamic client registration, PKCE), so anyone can add it by URL in claude.ai, Claude Desktop, or Claude Code and sign in with their own Google account. The server mints its own opaque, hashed, rotating tokens; the user's Google refresh token is held server-side, AES-256-GCM-encrypted beside the SQLite database. Refresh-token reuse burns the client's sessions; a Google-side revocation cascades. Per-request user context flows through `AsyncLocalStorage`, so every tool became per-user without changing. Sessions are owner-bound. Requires Node 24+.
-
-**v3.1.0** — Remote mode over Streamable HTTP. Tool registration moved into a `createServer()` factory, because `server.connect()` binds one server to one transport and HTTP mode needs a fresh instance per session. Sessions support client teardown plus an idle sweeper; `/healthz` reports liveness without auth. Auth is a shared bearer token, constant-time compared. `generate_report` returns markdown inline rather than writing to the server's disk, and `image_page_audit` refuses private targets. Ships a Dockerfile and compose file publishing to loopback only.
-
-**v3.0.0** — Multi-property support, and the fork point. Every property-scoped tool takes an optional `site_url`, so one process covers a whole account instead of the single property named by `GSC_SITE_URL`; 16 tools gained the parameter the image-search tools already had. New `list_properties` exposes `sites.list` at runtime. `GSC_SITE_URL` became optional.
-
-**v2.5.1 and earlier** — upstream history: the 29-tool baseline, the image-search suite, generative-AI conversation-query detection, OAuth and service-account support, and the read-only scope tier. See [upstream's changelog](https://github.com/Suganthan-Mohanadasan/Suganthans-GSC-MCP#changelog).
+Full notes for this release and every earlier one, back to the v3.0.0 fork point: [CHANGELOG.md](CHANGELOG.md).
 
 ---
 

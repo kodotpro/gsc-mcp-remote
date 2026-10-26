@@ -1,0 +1,21 @@
+version: 2
+updates:
+  - package-ecosystem: npm
+    directory: /
+    schedule:
+      interval: weekly
+    groups:
+      # Only patch/minor land bundled — majors get their own PR each for
+      # individual review rather than riding along in a group that looks
+      # routine at a glance.
+      dependencies:
+        patterns:
+          - "*"
+        update-types:
+          - "minor"
+          - "patch"
+
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly

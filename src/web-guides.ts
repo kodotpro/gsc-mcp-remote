@@ -160,9 +160,8 @@ function claudePage(info: SiteInfo): string {
   <table>
     <tr><th>What you see</th><th>Why, and what to do</th></tr>
     <tr><td><code>access_denied</code> from Google</td>
-        <td>While Google's app verification is pending, Google limits sign-in to an
-            approved list of accounts. <a href="https://github.com/kodotpro/gsc-mcp-remote/issues" rel="noopener">Open an issue</a>
-            to ask for access, or <a href="/self-host">run your own copy</a>.</td></tr>
+        <td>Consent was declined or blocked: you pressed Cancel, or your Google Workspace
+            admin restricts third-party apps. Try again, or ask your admin to allow the app.</td></tr>
     <tr><td>The connector dialog rejects the URL</td>
         <td>Check it is exactly <code>${esc(mcpUrl)}</code>.</td></tr>
     <tr><td>&ldquo;This session belongs to a different user&rdquo;</td>
