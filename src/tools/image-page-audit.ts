@@ -3,6 +3,8 @@ import { imageDimensions, MEASURABLE_FORMATS } from "../image-dimensions.js";
 import exifr from "exifr";
 import { isRemoteMode } from "../runtime.js";
 import { boundedText } from "../guardrails.js";
+import { assessHtmlComplexity } from "../html-limits.js";
+import { neutralisePngIcc } from "../png-icc.js";
 import { safeFetch, BlockedUrlError } from "../net-guard.js";
 
 /**
@@ -39,7 +41,9 @@ const IMAGE_TIMEOUT_MS = 12000;
 const MAX_IMAGE_BYTES = Number(process.env.GSC_MAX_IMAGE_BYTES ?? 3 * 1024 * 1024);
 // HTML is parsed into a DOM, so it costs several times its wire size in
 // memory. Cap it well below the image ceiling.
-const MAX_PAGE_BYTES = 5 * 1024 * 1024;
+const MAX_PAGE_BYTES = Number(process.env.GSC_MAX_PAGE_BYTES ?? 2 * 1024 * 1024);
+/** One call may chain up to 5 pages x 51 fetches; this bounds the whole thing. Read per call. */
+const auditDeadlineMs = (): number => Number(process.env.GSC_AUDIT_DEADLINE_MS ?? 90_000);
 
 const INDEX_MIN_WIDTH = 250;
 const INDEX_MIN_HEIGHT = 200;
@@ -347,7 +351,8 @@ async function auditImage(
 
   if (fetchMetadata && sniffed && METADATA_FORMATS.has(sniffed)) {
     try {
-      const meta = await exifr.parse(buffer, {
+      // A colour-profile chunk is the one thing exifr inflates without a limit.
+      const meta = await exifr.parse(sniffed === "png" ? neutralisePngIcc(buffer) : buffer, {
         tiff: true,
         exif: true,
         gps: true,
@@ -405,10 +410,16 @@ export async function imagePageAudit(
   // multiplies the response; bound it here as well as in the schema.
   maxImagesReported = Math.max(1, Math.min(100, Math.floor(maxImagesReported) || 20));
   const audits: PageAudit[] = [];
+  const deadline = Date.now() + auditDeadlineMs();
 
   for (const rawUrl of urls.slice(0, 5)) {
     const audit: PageAudit = { url: rawUrl, status: "ok", http_status: null };
     audits.push(audit);
+    if (Date.now() > deadline) {
+      audit.status = "fetch_failed";
+      audit.error = "Not audited: the overall time limit for one call was reached before this page. Run it again on its own.";
+      continue;
+    }
 
     let response: Awaited<ReturnType<typeof fetchGuarded>>;
     try {
@@ -431,6 +442,13 @@ export async function imagePageAudit(
     }
 
     const html = response.body.toString("utf8");
+    // Measure before parsing: the DOM parser's cost is not bounded by the byte cap.
+    const complexity = assessHtmlComplexity(html);
+    if (!complexity.ok) {
+      audit.status = "fetch_failed";
+      audit.error = `Page not parsed: it is not a plausible web page (${complexity.reason}).`;
+      continue;
+    }
     const root = parse(html);
     const pageUrl = response.url || rawUrl;
 
@@ -556,10 +574,13 @@ export async function imagePageAudit(
       findings.push(finding);
     }
 
-    const toFetch = findings
-      .filter((f) => fetchable.some((c) => c.src === f.src))
-      .slice(0, maxImagesPerPage);
+    const fetchableSrcs = new Set(fetchable.map((c) => c.src));
+    const toFetch = findings.filter((f) => fetchableSrcs.has(f.src)).slice(0, maxImagesPerPage);
     for (const finding of toFetch) {
+      if (Date.now() > deadline) {
+        audit.error = "Stopped early: the overall time limit for one call was reached, so later images on this page were not fetched.";
+        break;
+      }
       try {
         Object.assign(finding, await auditImage(finding.src, fetchMetadata));
       } catch {

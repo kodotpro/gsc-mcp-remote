@@ -11,6 +11,8 @@
  * Run: node scripts/check-hardening.mjs
  */
 import http from "node:http";
+import zlib from "node:zlib";
+import { createRequire } from "node:module";
 import path from "node:path";
 import { isPrivateAddress, assertPublicUrl, safeFetch } from "../dist/net-guard.js";
 import { confineReportPath } from "../dist/tools/generate-report.js";
@@ -25,6 +27,8 @@ import { submitSitemap } from "../dist/tools/submit-sitemap.js";
 import { runWithUserContext } from "../dist/request-context.js";
 import { withMeta, boundedText, UNTRUSTED_TEXT_NOTICE } from "../dist/guardrails.js";
 import { imagePageAudit } from "../dist/tools/image-page-audit.js";
+import { assessHtmlComplexity } from "../dist/html-limits.js";
+import { neutralisePngIcc } from "../dist/png-icc.js";
 
 const failures = [];
 const check = (label, ok, detail = "") => {
@@ -626,6 +630,120 @@ console.log("\nThird-party text is marked and bounded before it reaches the mode
   } finally {
     await client.close();
     await server.close();
+  }
+}
+
+// ---------------------------------------------------------------------------
+console.log("\nimage_page_audit cannot be turned into a shared-process stall");
+// ---------------------------------------------------------------------------
+// The tool hands whatever a caller-named server returns to an HTML parser, an
+// SVG reader and exifr, all synchronous on the event loop every tenant shares.
+// Each had an input shape whose cost the byte cap does not bound. These pin the
+// WORK, with inputs a superlinear implementation cannot finish in time.
+{
+  const timed = (fn) => { const t0 = performance.now(); const r = fn(); return [r, performance.now() - t0]; };
+
+  // --- the SVG reader: /<svg\b[^>]*>/ restarted its scan from every "<svg" ---
+  const hostileSvg = Buffer.from("<svg ".repeat(13_000)); // 65 KB, no ">" anywhere
+  const [, svgMs] = timed(() => imageDimensions(hostileSvg, "svg"));
+  check("ATTACK: a 65 KB SVG of repeated '<svg ' is read in linear time", svgMs < 100, `${svgMs.toFixed(1)} ms`);
+  const [, svgMs2] = timed(() => imageDimensions(Buffer.from('<svg width="' + "1".repeat(60_000)), "svg"));
+  check("ATTACK: a 60,000-digit width attribute is read in linear time", svgMs2 < 100, `${svgMs2.toFixed(1)} ms`);
+  check("an ordinary SVG is still measured", JSON.stringify(imageDimensions(Buffer.from('<?xml version="1.0"?><svg xmlns="http://www.w3.org/2000/svg" width="640" height="480"></svg>'), "svg")) === '{"width":640,"height":480}');
+  check("an SVG with only a viewBox is still measured", JSON.stringify(imageDimensions(Buffer.from('<svg viewBox="0 0 24 24"></svg>'), "svg")) === '{"width":24,"height":24}');
+
+  // --- the pre-parse HTML gate ---
+  const ok = (html) => assessHtmlComplexity(html).ok;
+  check("an ordinary page passes", ok("<!doctype html><html><head><title>t</title></head><body>" + "<div><p>x</p><img src='a.png'></div>".repeat(1500) + "</body></html>"));
+  check("legacy markup with thousands of unclosed <p> and <li> passes", ok("<ul>" + "<li>item<p>para".repeat(15_000) + "</ul>"));
+  check("closed nesting of a realistic depth passes", ok("<div>".repeat(60) + "x" + "</div>".repeat(60)));
+  check("ATTACK: 1,000 unclosed nested <div> is refused", !ok("<div>".repeat(1_000)));
+  check("ATTACK: 300 levels of nesting is refused", !ok("<div>".repeat(300) + "</div>".repeat(300)));
+  check("ATTACK: more <img> elements than the tool will ever audit is refused", !ok("<img src=a.png>".repeat(4_001)));
+  check("ATTACK: more tags than any real page is refused", !ok("<span>x</span>".repeat(40_000)));
+  const hostile = [
+    ["a million stray '<'", "<".repeat(1_000_000)],
+    ["200,000 unterminated tags", "<a ".repeat(200_000)],
+    ["a 500,000-'<' script body", "<script>" + "<".repeat(500_000) + "</script><p>after</p>"],
+    ["'<' then one far '>'", "<".repeat(400_000) + ">"],
+    ["comment openers", "<!--".repeat(100_000)],
+  ];
+  const [, gateMs] = timed(() => hostile.map(([, h]) => assessHtmlComplexity(h)));
+  check("ATTACK: five hostile shapes are all assessed in linear time", gateMs < 500, `${gateMs.toFixed(1)} ms total`);
+  check("a script body full of '<' is not counted as markup", ok("<script>" + "<div>".repeat(50_000) + "</script><p>after</p>"));
+
+  // --- exifr's unlimited iCCP inflate ---
+  const chunk = (type, data) => {
+    const b = Buffer.alloc(12 + data.length);
+    b.writeUInt32BE(data.length, 0); b.write(type, 4, "latin1"); data.copy(b, 8);
+    return b; // the CRC is not checked by either parser
+  };
+  const ihdr = Buffer.alloc(13); ihdr.writeUInt32BE(800, 0); ihdr.writeUInt32BE(600, 4); ihdr[8] = 8; ihdr[9] = 2;
+  const iccData = Buffer.concat([Buffer.from("icc\0\0", "latin1"), zlib.deflateSync(Buffer.alloc(300_000))]);
+  const png = Buffer.concat([Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]), chunk("IHDR", ihdr), chunk("iCCP", iccData), chunk("IEND", Buffer.alloc(0))]);
+  const neutral = neutralisePngIcc(png);
+  check("the iCCP chunk type is renamed on a copy", neutral !== png && neutral.indexOf("iCCP") === -1 && neutral.indexOf("xCCP") !== -1);
+  check("...and the original buffer is untouched", png.indexOf("iCCP") !== -1);
+  check("a PNG without a profile is returned as is", (() => { const plain = Buffer.concat([png.subarray(0, 8), chunk("IHDR", ihdr), chunk("IEND", Buffer.alloc(0))]); return neutralisePngIcc(plain) === plain; })());
+  const lying = Buffer.concat([png.subarray(0, 8), Buffer.from([0xff, 0xff, 0xff, 0xff]), Buffer.from("iCCP"), Buffer.alloc(8)]);
+  const [, walkMs] = timed(() => neutralisePngIcc(lying));
+  check("ATTACK: a chunk claiming a 4 GB length ends the walk instead of hanging it", walkMs < 50, `${walkMs.toFixed(1)} ms`);
+
+  // Prove the premise, then prove the fix on the REAL audit path: spy on inflate.
+  const requireCjs = createRequire(import.meta.url);
+  const exifrCjs = requireCjs("exifr");
+  const realInflate = zlib.inflateSync;
+  let inflates = 0;
+  zlib.inflateSync = (...a) => { inflates++; return realInflate.apply(zlib, a); };
+  try {
+    const opts = { tiff: true, exif: true, gps: true, iptc: true, xmp: true };
+    await exifrCjs.parse(png, opts).catch(() => {});
+    const direct = inflates;
+    check("premise: exifr inflates an iCCP chunk when handed the raw PNG", direct > 0, `inflateSync calls: ${direct}`);
+    inflates = 0;
+    await exifrCjs.parse(neutralisePngIcc(png), opts).catch(() => {});
+    check("ATTACK: after neutralising, exifr does not inflate it", inflates === 0, `inflateSync calls: ${inflates}`);
+
+    // end to end through the real tool
+    inflates = 0;
+    const fixture = http.createServer((req, res) => {
+      if (req.url === "/page") { res.writeHead(200, { "content-type": "text/html" }); res.end('<html><body><img src="/p.png" alt="a photo of a harbour" width="800" height="600"></body></html>'); return; }
+      if (req.url === "/p.png") { res.writeHead(200, { "content-type": "image/png" }); res.end(png); return; }
+      res.writeHead(404); res.end();
+    });
+    await new Promise((r) => fixture.listen(0, "127.0.0.1", r));
+    try {
+      const { audits } = await imagePageAudit([`http://127.0.0.1:${fixture.address().port}/page`], true, 4, 4);
+      check("the audit fetched and measured the PNG", audits[0]?.images?.[0]?.fetched === true && audits[0].images[0].format === "image/png", JSON.stringify(audits[0]?.images?.[0]).slice(0, 160));
+      check("ATTACK: the real audit path never inflates the colour profile", inflates === 0, `inflateSync calls: ${inflates}`);
+    } finally {
+      await new Promise((r) => fixture.close(r));
+    }
+  } finally {
+    zlib.inflateSync = realInflate;
+  }
+
+  // --- the gate, end to end, and the per-call deadline ---
+  const fx2 = http.createServer((req, res) => {
+    if (req.url === "/deep") { res.writeHead(200, { "content-type": "text/html" }); res.end("<html><body>" + "<div>".repeat(3000)); return; }
+    if (req.url === "/slow") { setTimeout(() => { res.writeHead(200, { "content-type": "text/html" }); res.end("<html><body><p>hi</p></body></html>"); }, 250); return; }
+    res.writeHead(200, { "content-type": "text/html" }); res.end("<html><body><p>hi</p></body></html>");
+  });
+  await new Promise((r) => fx2.listen(0, "127.0.0.1", r));
+  const b2 = `http://127.0.0.1:${fx2.address().port}`;
+  try {
+    const t0 = performance.now();
+    const { audits } = await imagePageAudit([`${b2}/deep`], false, 4, 4);
+    check("ATTACK: a page of 3,000 unclosed nested <div> is refused before it is parsed", audits[0]?.status === "fetch_failed" && /not a plausible web page/.test(audits[0].error ?? ""), audits[0]?.error);
+    check("...promptly", performance.now() - t0 < 1500, `${(performance.now() - t0).toFixed(0)} ms`);
+
+    process.env.GSC_AUDIT_DEADLINE_MS = "100";
+    const two = await imagePageAudit([`${b2}/slow`, `${b2}/other`], false, 4, 4);
+    check("ATTACK: one call cannot run past its overall deadline", two.audits[0]?.status === "ok" && two.audits[1]?.status === "fetch_failed" && /time limit/.test(two.audits[1].error ?? ""), JSON.stringify(two.audits.map((a) => a.status)));
+    delete process.env.GSC_AUDIT_DEADLINE_MS;
+  } finally {
+    delete process.env.GSC_AUDIT_DEADLINE_MS;
+    await new Promise((r) => fx2.close(r));
   }
 }
 
