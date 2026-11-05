@@ -865,12 +865,19 @@ try {
   const noDefaultText = noDefault?.result?.content?.[0]?.text ?? "";
   check("per-user context reaches tools (remote error text)", noDefaultText.includes("set_default_property"), noDefaultText.slice(0, 140));
 
+  // set_default_property persists a TRUSTED, durable value the model supplied, so
+  // it is stored only for a property the account is proven to have. This user has
+  // no Google connection, so nothing can be proven and nothing may be saved.
   const setDef = await (await rpc(TOKEN_A, sidA, { jsonrpc: "2.0", id: 5, method: "tools/call", params: { name: "set_default_property", arguments: { site_url: "sc-domain:seeded.example" } } })).json();
-  check("set_default_property saves for the user", (setDef?.result?.content?.[0]?.text ?? "").includes("sc-domain:seeded.example"));
+  const setDefText = setDef?.result?.content?.[0]?.text ?? JSON.stringify(setDef).slice(0, 200);
+  const readDb = new DatabaseSync(path.join(tmp, "http.db"));
+  const savedRow = readDb.prepare("SELECT default_property FROM user_settings WHERE user_id = 'user-a'").get();
+  readDb.close();
+  check("set_default_property saves nothing it cannot verify against the account's own properties", !savedRow && (setDef?.result?.isError === true || /reconnect|No active Google connection/.test(setDefText)), setDefText.slice(0, 160));
 
-  // Now the property resolves, and the next stop is the (absent) Google
-  // connection — which must fail with the clear reconnect message, not a crash.
-  const noGoogle = await (await rpc(TOKEN_A, sidA, { jsonrpc: "2.0", id: 6, method: "tools/call", params: { name: "quick_wins", arguments: {} } })).json();
+  // An explicit property still reaches the (absent) Google connection, which must
+  // fail with the clear reconnect message, not a crash.
+  const noGoogle = await (await rpc(TOKEN_A, sidA, { jsonrpc: "2.0", id: 6, method: "tools/call", params: { name: "quick_wins", arguments: { site_url: "sc-domain:seeded.example" } } })).json();
   const noGoogleText = noGoogle?.result?.content?.[0]?.text ?? JSON.stringify(noGoogle).slice(0, 140);
   check("missing Google connection fails with reconnect guidance", noGoogleText.includes("reconnect") || noGoogleText.includes("No active Google connection"), noGoogleText.slice(0, 140));
 } catch (err) {

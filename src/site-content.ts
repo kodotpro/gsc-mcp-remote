@@ -490,7 +490,8 @@ export const TOOL_GROUPS: ToolGroup[] = [
         what: "Erase all of it and end your sessions",
         ask: "Disconnect my account and erase what you store.",
         detailHtml: "Erases the stored Google connection, every token and your saved settings, " +
-          "and ends your open sessions.",
+          "and ends your open sessions. It asks before it acts: the first call explains what will " +
+          "be erased and returns a one-time code, and a second call with that code does it.",
         params: [],
       },
     ],
