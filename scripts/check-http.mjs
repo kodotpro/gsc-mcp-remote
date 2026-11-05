@@ -38,7 +38,7 @@ const TOKEN = "smoke-test-token-not-a-secret-0123456789";
 const PORT = 20000 + Math.floor(Math.random() * 9000);
 const BASE = `http://127.0.0.1:${PORT}`;
 const MAX_SESSIONS = 5;
-const RATE_LIMIT = 4;
+const RATE_LIMIT = 4; // used only by the dedicated rate-limit servers below
 const CONTACT = "ops@example.invalid";
 
 const failures = [];
@@ -60,7 +60,10 @@ const proc = spawn("node", ["dist/index.js", "http"], {
     // Small enough to exercise the limits quickly, and a fast sweep so the
     // idle check does not have to wait a real minute.
     GSC_MAX_SESSIONS: String(MAX_SESSIONS),
-    GSC_RATE_LIMIT_PER_MIN: String(RATE_LIMIT),
+    // High on this server: the session-ceiling checks above open many sessions
+    // with initialize, which the limiter now counts. The limiter itself is
+    // exercised on dedicated servers further down.
+    GSC_RATE_LIMIT_PER_MIN: "1000",
     GSC_HTTP_IDLE_TIMEOUT_MS: "1000",
     GSC_HTTP_SWEEP_INTERVAL_MS: "250",
     GSC_CONTACT_EMAIL: CONTACT,
@@ -481,16 +484,100 @@ try {
   );
 
   // -- rate limiting ---------------------------------------------------------
-  if (held.length > 0) {
-    const rlHeaders = { ...auth, "mcp-session-id": held[0] };
+  // Each scenario gets its own short-lived server so it starts with a fresh
+  // budget. Every one of them is an attack that used to go uncounted: the
+  // limiter sat inside the "request carries a session id" branch and charged one
+  // unit per HTTP request, so initialize, GET, DELETE and unknown-session
+  // probes were free and a 100-message JSON-RPC batch cost the same as one.
+  const withServer = async (rate, fn) => {
+    const rp = 20000 + Math.floor(Math.random() * 9000);
+    const rbase = `http://127.0.0.1:${rp}`;
+    const child = spawn("node", ["dist/index.js", "http"], {
+      env: { ...process.env, GSC_HTTP_TOKEN: TOKEN, GSC_HTTP_PORT: String(rp), GSC_HTTP_HOST: "127.0.0.1", GSC_RATE_LIMIT_PER_MIN: String(rate), GSC_CONTACT_EMAIL: CONTACT },
+      stdio: ["ignore", "ignore", "pipe"],
+    });
+    let err = "";
+    child.stderr.on("data", (c) => (err += c.toString()));
+    try {
+      let up = false;
+      for (let i = 0; i < 60 && !up; i++) {
+        if (child.exitCode !== null) throw new Error(`rate-limit server exited early:\n${err}`);
+        up = await fetch(`${rbase}/healthz`).then((r) => r.ok).catch(() => false);
+        if (!up) await new Promise((r) => setTimeout(r, 250));
+      }
+      if (!up) throw new Error(`rate-limit server did not become healthy:\n${err}`);
+      const rpost = (body, headers = {}) => fetch(`${rbase}/mcp`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Accept: "application/json, text/event-stream", ...auth, ...headers },
+        body: JSON.stringify(body),
+      });
+      return await fn({ rbase, rpost });
+    } finally {
+      child.kill("SIGTERM");
+    }
+  };
+  const initBody = (id) => ({ jsonrpc: "2.0", id, method: "initialize", params: { protocolVersion: "2024-11-05", capabilities: {}, clientInfo: { name: "rl", version: "1" } } });
+
+  await withServer(RATE_LIMIT, async ({ rpost }) => {
+    // ordinary traffic still engages the limiter and says when to retry
+    const init = await rpost(initBody(1));
+    const sid = init.headers.get("mcp-session-id");
+    await init.text();
     let limited = null;
     for (let i = 0; i < RATE_LIMIT + 3; i++) {
-      const r = await post({ jsonrpc: "2.0", id: 10 + i, method: "tools/list" }, rlHeaders);
+      const r = await rpost({ jsonrpc: "2.0", id: 10 + i, method: "tools/list" }, { "mcp-session-id": sid });
       if (r.status === 429) { limited = { at: i + 1, retryAfter: r.headers.get("retry-after") }; break; }
     }
     check("the request rate limit engages", limited !== null, `no 429 within ${RATE_LIMIT + 3} requests`);
     check("the 429 carries Retry-After", Boolean(limited?.retryAfter), `got ${limited?.retryAfter}`);
-  }
+  });
+
+  await withServer(RATE_LIMIT, async ({ rpost }) => {
+    // ATTACK: session churn. initialize allocates a whole McpServer with every
+    // tool registered and carries no session id, so it used to bypass the limit.
+    let firstLimit = null, accepted = 0;
+    for (let i = 0; i < RATE_LIMIT + 6; i++) {
+      const r = await rpost(initBody(100 + i));
+      await r.text();
+      if (r.status === 429) { firstLimit = i + 1; break; }
+      accepted++;
+    }
+    check("ATTACK: initialize (session churn) is rate limited", firstLimit !== null && accepted <= RATE_LIMIT, `accepted ${accepted}, first 429 at ${firstLimit}`);
+  });
+
+  await withServer(10, async ({ rpost }) => {
+    // ATTACK: a JSON-RPC batch. The unit of account is the message.
+    const init = await rpost(initBody(200));
+    const sid = init.headers.get("mcp-session-id");
+    await init.text();
+    const pings = (n, base) => Array.from({ length: n }, (_, i) => ({ jsonrpc: "2.0", id: base + i, method: "ping" }));
+    const big = await rpost(pings(11, 300), { "mcp-session-id": sid });
+    check("ATTACK: one batch of more messages than the budget is refused", big.status === 429, `got ${big.status}`);
+  });
+
+  await withServer(10, async ({ rpost }) => {
+    const init = await rpost(initBody(400));
+    const sid = init.headers.get("mcp-session-id");
+    await init.text();
+    const pings = (n, base) => Array.from({ length: n }, (_, i) => ({ jsonrpc: "2.0", id: base + i, method: "ping" }));
+    const first = await rpost(pings(5, 500), { "mcp-session-id": sid });
+    await first.text();
+    const second = await rpost(pings(5, 600), { "mcp-session-id": sid });
+    await second.text();
+    const third = await rpost(pings(1, 700), { "mcp-session-id": sid });
+    check("batches are charged per message: 1 + 5 + 5 + 1 exceeds a budget of 10", first.status !== 429 && third.status === 429, `first ${first.status}, third ${third.status}`);
+  });
+
+  await withServer(3, async ({ rbase }) => {
+    // ATTACK: probing with requests that never reach the session branch.
+    let limited = false;
+    for (let i = 0; i < 8; i++) {
+      const r = await fetch(`${rbase}/mcp`, { method: "DELETE", headers: { ...auth, "mcp-session-id": "does-not-exist" } });
+      await r.text();
+      if (r.status === 429) { limited = true; break; }
+    }
+    check("ATTACK: DELETE/GET probes against unknown sessions are rate limited", limited);
+  });
 
   // -- the idle sweeper ------------------------------------------------------
   // Idle timeout is 1s and the sweep runs every 250ms, so everything still

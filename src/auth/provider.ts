@@ -36,6 +36,7 @@ const REFRESH_TTL_MS = 30 * 24 * 60 * 60 * 1000; // 30 days
 const CODE_TTL_MS = 60 * 1000;                   // 1 minute
 const PENDING_TTL_MS = 10 * 60 * 1000;           // consent-screen dwell time
 const CLIENT_TTL_MS = 7 * 24 * 60 * 60 * 1000;   // unused registrations are swept
+const LAST_SEEN_WRITE_INTERVAL_MS = 60 * 1000;   // verifyAccessToken's activity stamp
 /** Upper bound on stored registrations; see makeRoomForRegistration. */
 const DEFAULT_MAX_REGISTERED_CLIENTS = 10_000;
 
@@ -87,6 +88,8 @@ export class GscOAuthProvider implements OAuthServerProvider {
   private readonly identity: GoogleIdentityLike;
   private readonly resourceUrl: string;
   private readonly cookieSecure: boolean;
+  /** userId -> when last_seen_at was last written; bounded by the user count. */
+  private readonly lastSeenWritten = new Map<string, number>();
   private readonly maxRegisteredClients: number;
 
   constructor(opts: GscOAuthProviderOptions) {
@@ -432,7 +435,7 @@ export class GscOAuthProvider implements OAuthServerProvider {
     }
 
     const user = this.db.prepare("SELECT email FROM users WHERE id = ?").get(row.user_id) as { email: string } | undefined;
-    this.db.prepare("UPDATE users SET last_seen_at = ? WHERE id = ?").run(Date.now(), row.user_id);
+    this.touchLastSeen(row.user_id);
 
     return {
       token,
@@ -442,6 +445,24 @@ export class GscOAuthProvider implements OAuthServerProvider {
       resource: row.resource ? new URL(row.resource) : undefined,
       extra: { userId: row.user_id, email: user?.email },
     };
+  }
+
+  /**
+   * Records that the user was seen, at most once per LAST_SEEN_WRITE_INTERVAL_MS.
+   *
+   * This used to be an unconditional UPDATE on every authenticated request. The
+   * database is synchronous and shared by every tenant on one event loop, so
+   * each of those writes was a commit (and an fsync) that every other request
+   * waited behind, and it ran before any rate check. A "last seen" stamp that is
+   * accurate to a minute serves every purpose it has (inactive-account review),
+   * so the write is skipped when a recent one already happened.
+   */
+  private touchLastSeen(userId: string): void {
+    const now = Date.now();
+    const last = this.lastSeenWritten.get(userId);
+    if (last !== undefined && now - last < LAST_SEEN_WRITE_INTERVAL_MS) return;
+    this.lastSeenWritten.set(userId, now);
+    this.db.prepare("UPDATE users SET last_seen_at = ? WHERE id = ?").run(now, userId);
   }
 
   async revokeToken(client: OAuthClientInformationFull, request: OAuthTokenRevocationRequest): Promise<void> {

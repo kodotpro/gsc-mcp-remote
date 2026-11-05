@@ -531,6 +531,29 @@ console.log("\nData files and the vault key fail closed");
 }
 
 // ---------------------------------------------------------------------------
+console.log("\nThe authenticated hot path does not write on every request");
+// ---------------------------------------------------------------------------
+// verifyAccessToken used to UPDATE users.last_seen_at on every request. The
+// database is synchronous and shared by every tenant on one event loop, so each
+// of those was a commit that all other requests waited behind, and it ran
+// before any rate check.
+{
+  const hdb = openAuthDb(path.join(tmp, "hot-path.db"));
+  const hp = new GscOAuthProvider({ db: hdb, vaultKey, identity: fakeIdentity, resourceUrl: RESOURCE });
+  const hnow = Date.now();
+  const hsha = (v) => createHash("sha256").update(v).digest("hex");
+  hdb.prepare("INSERT INTO users (id, google_sub, email, created_at, last_seen_at) VALUES ('uH','sH','h@example.com',?,?)").run(hnow, 1);
+  hdb.prepare("INSERT INTO access_tokens (token_hash, user_id, client_id, scopes, resource, expires_at, created_at) VALUES (?, 'uH', 'c', 'gsc:read', NULL, ?, ?)").run(hsha("hot-at"), hnow + 3600_000, hnow);
+  const seen = () => hdb.prepare("SELECT last_seen_at AS t FROM users WHERE id = 'uH'").get().t;
+  await hp.verifyAccessToken("hot-at");
+  check("the first authenticated request records the user as seen", seen() >= hnow, String(seen()));
+  hdb.prepare("UPDATE users SET last_seen_at = 7 WHERE id = 'uH'").run();
+  for (let i = 0; i < 25; i++) await hp.verifyAccessToken("hot-at");
+  check("25 more requests within the interval write nothing", seen() === 7, `last_seen_at became ${seen()}`);
+  hdb.close();
+}
+
+// ---------------------------------------------------------------------------
 console.log("\nData deletion and export (the promises the privacy policy makes)");
 // ---------------------------------------------------------------------------
 // The README, the privacy page and the Google verification documents all state

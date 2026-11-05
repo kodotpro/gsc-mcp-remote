@@ -83,21 +83,36 @@ const MAX_SESSIONS_PER_USER = Number(process.env.GSC_MAX_SESSIONS_PER_USER ?? 8)
 /** Tool calls allowed per user per minute (bearer mode counts as one user). */
 const RATE_LIMIT_PER_MIN = Number(process.env.GSC_RATE_LIMIT_PER_MIN ?? 60);
 
-/** Sliding-window counters, keyed by user id (or "shared" in bearer mode). */
+/** Fixed-window counters, keyed by user id (or "shared" in bearer mode). */
 const rateBuckets = new Map<string, { count: number; resetAt: number }>();
 
-function rateLimitExceeded(key: string): { limited: boolean; retryAfter: number } {
+/**
+ * Charges `cost` against the caller's per-minute budget.
+ *
+ * The unit of account is the JSON-RPC MESSAGE, not the HTTP request: the SDK
+ * accepts a batch of up to 100 messages in one POST, so charging one unit per
+ * request let a single connection do roughly a hundred times its budget. The
+ * charge is applied even when it overshoots, so retrying a refused batch does
+ * not reset the debt.
+ */
+function rateLimitExceeded(key: string, cost = 1): { limited: boolean; retryAfter: number } {
   const now = Date.now();
   const bucket = rateBuckets.get(key);
   if (!bucket || bucket.resetAt <= now) {
-    rateBuckets.set(key, { count: 1, resetAt: now + 60_000 });
-    return { limited: false, retryAfter: 0 };
+    rateBuckets.set(key, { count: cost, resetAt: now + 60_000 });
+    if (cost <= RATE_LIMIT_PER_MIN) return { limited: false, retryAfter: 0 };
+    return { limited: true, retryAfter: 60 };
   }
-  bucket.count += 1;
+  bucket.count += cost;
   if (bucket.count > RATE_LIMIT_PER_MIN) {
     return { limited: true, retryAfter: Math.max(1, Math.ceil((bucket.resetAt - now) / 1000)) };
   }
   return { limited: false, retryAfter: 0 };
+}
+
+/** Messages in a JSON-RPC body: a batch is an array and costs one per element. */
+function rpcCost(body: unknown): number {
+  return Array.isArray(body) ? Math.max(1, body.length) : 1;
 }
 
 /**
@@ -649,8 +664,30 @@ export async function startHttpServer(): Promise<HttpServer> {
     };
   };
 
+  /**
+   * Per-user request budget: one tenant must not be able to saturate a shared
+   * box (or the account-wide Google quota) for everyone else.
+   *
+   * Applied to EVERY /mcp request, not only POSTs that carry a session id. It
+   * used to sit inside the session branch, so `initialize` (which allocates a
+   * whole McpServer), GET, DELETE and unknown-session probes were free: an
+   * authenticated user could churn sessions at over a thousand a second without
+   * the limiter ever counting one.
+   */
+  const refuseIfRateLimited = (req: Request, res: Response, cost: number): boolean => {
+    const rl = rateLimitExceeded(userIdOf(req) ?? "shared", cost);
+    if (!rl.limited) return false;
+    res.status(429).set("Retry-After", String(rl.retryAfter)).json({
+      jsonrpc: "2.0",
+      error: { code: -32000, message: `Rate limit reached (${RATE_LIMIT_PER_MIN} requests/minute). Retry in ${rl.retryAfter}s.` },
+      id: null,
+    });
+    return true;
+  };
+
   app.post(MCP_PATHS, requireAuth, async (req: Request, res: Response) => {
     const sessionId = req.headers["mcp-session-id"] as string | undefined;
+    if (refuseIfRateLimited(req, res, rpcCost(req.body))) return;
 
     try {
       if (sessionId) {
@@ -664,19 +701,6 @@ export async function startHttpServer(): Promise<HttpServer> {
           return;
         }
         if (!ownsSession(req, res, session)) return;
-
-        // Per-user request budget: one tenant must not be able to saturate a
-        // shared box (or the account-wide Google quota) for everyone else.
-        const rlKey = userIdOf(req) ?? "shared";
-        const rl = rateLimitExceeded(rlKey);
-        if (rl.limited) {
-          res.status(429).set("Retry-After", String(rl.retryAfter)).json({
-            jsonrpc: "2.0",
-            error: { code: -32000, message: `Rate limit reached (${RATE_LIMIT_PER_MIN} requests/minute). Retry in ${rl.retryAfter}s.` },
-            id: null,
-          });
-          return;
-        }
 
         session.lastSeen = Date.now();
 
@@ -767,6 +791,7 @@ export async function startHttpServer(): Promise<HttpServer> {
   // GET opens the notification stream; DELETE ends a session. Ownership is
   // enforced here too — a session id alone must never be enough.
   const bySessionId = async (req: Request, res: Response) => {
+    if (refuseIfRateLimited(req, res, 1)) return;
     const sessionId = req.headers["mcp-session-id"] as string | undefined;
     const session = sessionId ? sessions.get(sessionId) : undefined;
     if (!session) {
