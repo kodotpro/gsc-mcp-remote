@@ -743,12 +743,14 @@ console.log("\nimage_page_audit cannot be turned into a shared-process stall");
   }
 
   // --- the REAL parser, in a worker, under a timeout ---
-  // A heuristic gate that modelled the parser was bypassed by "<div></i>" x5000
-  // (45 KB, ~6 s of synchronous parsing), by optional-close tags the parser does
-  // not actually close, and by tokenizer disagreements. The property that matters
-  // is not "was this page refused" but "did the shared event loop stay free".
+  // A heuristic gate that modelled the parser was bypassed by "<div></i>" repeated
+  // (node-html-parser 9.0.5 cut that unclosed-tag cleanup from O(n^3) to O(n^2), so
+  // 5,000 repeats dropped below 400 ms while 35,000 — 315 KB, well under the 2 MB
+  // fetch cap — still takes ~6 s synchronously), by optional-close tags the parser
+  // does not actually close, and by tokenizer disagreements. The property that
+  // matters is not "was this page refused" but "did the shared event loop stay free".
   const fx2 = http.createServer((req, res) => {
-    if (req.url === "/deep") { res.writeHead(200, { "content-type": "text/html" }); res.end("<html><body>" + "<div></i>".repeat(5000)); return; }
+    if (req.url === "/deep") { res.writeHead(200, { "content-type": "text/html" }); res.end("<html><body>" + "<div></i>".repeat(35_000)); return; }
     if (req.url === "/rows") { res.writeHead(200, { "content-type": "text/html" }); res.end("<html><body>" + "<tr>".repeat(3000)); return; }
     if (req.url === "/slow") { setTimeout(() => { res.writeHead(200, { "content-type": "text/html" }); res.end("<html><body><p>hi</p></body></html>"); }, 250); return; }
     res.writeHead(200, { "content-type": "text/html" }); res.end("<html><body><p>hi</p></body></html>");
@@ -764,7 +766,7 @@ console.log("\nimage_page_audit cannot be turned into a shared-process stall");
     process.env.GSC_PARSE_TIMEOUT_MS = "400";
     const t0 = performance.now();
     const [{ audits }, lag] = await lagWhile(() => imagePageAudit([`${b2}/deep`], false, 4, 4));
-    check("ATTACK: a page that takes seconds to parse is abandoned at the timeout", audits[0]?.status === "fetch_failed" && /took longer than/.test(audits[0].error ?? ""), audits[0]?.error);
+    check("ATTACK: a page that takes seconds to parse is abandoned at the timeout", audits[0]?.status === "fetch_failed" && /took longer than/.test(audits[0].error ?? ""), audits[0]?.error ?? `status=${audits[0]?.status} (parsed inside 400 ms)`);
     check("...promptly", performance.now() - t0 < 2500, `${(performance.now() - t0).toFixed(0)} ms`);
     check("ATTACK: and the shared event loop never stalled while it was parsed (worst gap)", lag < 250, `${lag.toFixed(0)} ms`);
     const [{ audits: rows }, lag2] = await lagWhile(() => imagePageAudit([`${b2}/rows`], false, 4, 4));
