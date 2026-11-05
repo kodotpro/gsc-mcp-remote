@@ -459,7 +459,22 @@ export class GscOAuthProvider implements OAuthServerProvider {
     if (!row || row.status !== "active") {
       throw new Error("No active Google connection for this user; reconnect from your Claude client.");
     }
-    return vaultDecrypt(this.vaultKey, row.refresh_token_enc);
+    try {
+      return vaultDecrypt(this.vaultKey, row.refresh_token_enc);
+    } catch {
+      // The ciphertext does not open under the current key (a restore without
+      // the matching key, a corrupted row). It used to surface as a raw GCM
+      // authentication error that never reached the invalid_grant handler, so
+      // the user kept valid MCP tokens, saw an opaque failure on every call, and
+      // nothing prompted their client to reconnect. Treat it exactly like a dead
+      // grant: erase the unusable row and burn their MCP tokens, so the next
+      // request 401s and the client re-runs the connect flow on its own.
+      this.markGoogleRevoked(userId);
+      throw new Error(
+        "Your stored Google connection could not be read (the server's encryption key changed). " +
+        "Reconnect from your Claude client to sign in again."
+      );
+    }
   }
 
   /**

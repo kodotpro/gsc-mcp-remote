@@ -328,8 +328,16 @@ export async function startHttpServer(): Promise<HttpServer> {
     const dbPath = process.env.GSC_OAUTH_DB_FILE ?? path.join(home, ".gsc-mcp", "oauth-server.db");
     const keyPath = process.env.GSC_VAULT_KEY_FILE ?? path.join(home, ".gsc-mcp", "vault.key");
 
+    // Everything this process creates from here on (the SQLite database, its
+    // WAL and shared-memory files, the vault key) is private to this user,
+    // whatever the host's default umask is. The database holds every user's
+    // email, token hashes and registered clients' secrets.
+    process.umask(0o077);
     const db = authModules.db.openAuthDb(dbPath);
-    const vaultKey = authModules.crypto.loadOrCreateVaultKey(keyPath);
+    const vaultKey = authModules.crypto.loadOrCreateVaultKey(keyPath, {
+      sampleCiphertexts: () => authModules.db.sampleVaultedCiphertexts(db),
+      allowReplacement: process.env.GSC_ALLOW_NEW_VAULT_KEY === "1",
+    });
     const identity = authModules.identity.googleIdentityFromEnv(publicUrl);
     const resourceUrl = `${publicUrl}/mcp`;
     const cookieSecure = publicUrl.startsWith("https:");
