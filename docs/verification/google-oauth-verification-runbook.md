@@ -63,7 +63,7 @@ Google Auth Platform → Data access → Add or remove scopes.
 | `https://www.googleapis.com/auth/webmasters` | sensitive | no |
 | `https://www.googleapis.com/auth/indexing` | sensitive | no |
 
-**Request only `webmasters.readonly`.** Remote mode is read-only by design, and a single sensitive scope is the simplest possible review. The trade-off to be aware of: adding a scope later **restarts** review, so if write features are genuinely planned for the hosted service, it is cheaper to submit all three at once. Decide before submitting.
+**Request only `webmasters.readonly` as the sensitive scope** (sign-in also uses the non-sensitive `openid` and `email` identity scopes, which do not need justification beyond identifying the account). Remote mode is read-only by design, and a single sensitive scope is the simplest possible review. The trade-off to be aware of: adding a scope later **restarts** review, so if write features are genuinely planned for the hosted service, it is cheaper to submit all three at once. Decide before submitting.
 
 ## 5. Create the OAuth client
 

@@ -1,5 +1,6 @@
-import { getSearchConsoleClient, resolveSiteUrl, getAuthMode } from "../auth.js";
-import { getScopeTier } from "../oauth.js";
+import { getSearchConsoleClient, resolveSiteUrl } from "../auth.js";
+import { getUserContext } from "../request-context.js";
+import { getScopeTier, readOnlyExplanation } from "../oauth.js";
 
 interface SitemapSubmitResult {
   siteUrl: string;
@@ -61,14 +62,26 @@ function permissionHint(candidates: string[]): string {
 }
 
 export async function submitSitemap(sitemapUrl?: string, siteUrlOverride?: string): Promise<SitemapSubmitResult> {
-  if (getAuthMode() === "oauth" && getScopeTier() === "readonly") {
+  // Refuse on the PER-USER context too. This guard used to key on GSC_AUTH_MODE
+  // (stdio install logic), which the hosted server never sets, so in hosted mode
+  // the only thing standing between a model-issued submit_sitemap and Google was
+  // the token's own scope. The hosted server is read-only by design: say so here.
+  if (getUserContext()) {
     return {
       siteUrl: "",
       sitemapUrl: sitemapUrl || "",
       success: false,
       error:
-        "Sitemap submission needs full access, but this install is in read only mode (GSC_SCOPES=readonly). " +
-        "Re-run `node dist/index.js setup --reauth` and choose full access, then try again.",
+        "Sitemap submission is not available on this hosted server, which runs read-only and per-user. " +
+        "Run the server locally (stdio) with GSC_SCOPES=full to submit sitemaps for your own sites.",
+    };
+  }
+  if (getScopeTier() === "readonly") {
+    return {
+      siteUrl: "",
+      sitemapUrl: sitemapUrl || "",
+      success: false,
+      error: `Sitemap submission needs full access, but ${readOnlyExplanation()}`,
     };
   }
 

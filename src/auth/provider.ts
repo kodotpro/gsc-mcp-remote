@@ -36,6 +36,8 @@ const REFRESH_TTL_MS = 30 * 24 * 60 * 60 * 1000; // 30 days
 const CODE_TTL_MS = 60 * 1000;                   // 1 minute
 const PENDING_TTL_MS = 10 * 60 * 1000;           // consent-screen dwell time
 const CLIENT_TTL_MS = 7 * 24 * 60 * 60 * 1000;   // unused registrations are swept
+/** verifyAccessToken's activity stamp; read per call so a test can shorten it. */
+const lastSeenWriteIntervalMs = (): number => Number(process.env.GSC_LAST_SEEN_INTERVAL_MS ?? 60 * 1000);
 /** Upper bound on stored registrations; see makeRoomForRegistration. */
 const DEFAULT_MAX_REGISTERED_CLIENTS = 10_000;
 
@@ -87,6 +89,8 @@ export class GscOAuthProvider implements OAuthServerProvider {
   private readonly identity: GoogleIdentityLike;
   private readonly resourceUrl: string;
   private readonly cookieSecure: boolean;
+  /** userId -> when last_seen_at was last written; bounded by the user count. */
+  private readonly lastSeenWritten = new Map<string, number>();
   private readonly maxRegisteredClients: number;
 
   constructor(opts: GscOAuthProviderOptions) {
@@ -432,7 +436,7 @@ export class GscOAuthProvider implements OAuthServerProvider {
     }
 
     const user = this.db.prepare("SELECT email FROM users WHERE id = ?").get(row.user_id) as { email: string } | undefined;
-    this.db.prepare("UPDATE users SET last_seen_at = ? WHERE id = ?").run(Date.now(), row.user_id);
+    this.touchLastSeen(row.user_id);
 
     return {
       token,
@@ -442,6 +446,24 @@ export class GscOAuthProvider implements OAuthServerProvider {
       resource: row.resource ? new URL(row.resource) : undefined,
       extra: { userId: row.user_id, email: user?.email },
     };
+  }
+
+  /**
+   * Records that the user was seen, at most once a minute (GSC_LAST_SEEN_INTERVAL_MS).
+   *
+   * This used to be an unconditional UPDATE on every authenticated request. The
+   * database is synchronous and shared by every tenant on one event loop, so
+   * each of those writes was a commit (and an fsync) that every other request
+   * waited behind, and it ran before any rate check. A "last seen" stamp that is
+   * accurate to a minute serves every purpose it has (inactive-account review),
+   * so the write is skipped when a recent one already happened.
+   */
+  private touchLastSeen(userId: string): void {
+    const now = Date.now();
+    const last = this.lastSeenWritten.get(userId);
+    if (last !== undefined && now - last < lastSeenWriteIntervalMs()) return;
+    this.lastSeenWritten.set(userId, now);
+    this.db.prepare("UPDATE users SET last_seen_at = ? WHERE id = ?").run(now, userId);
   }
 
   async revokeToken(client: OAuthClientInformationFull, request: OAuthTokenRevocationRequest): Promise<void> {
@@ -459,7 +481,22 @@ export class GscOAuthProvider implements OAuthServerProvider {
     if (!row || row.status !== "active") {
       throw new Error("No active Google connection for this user; reconnect from your Claude client.");
     }
-    return vaultDecrypt(this.vaultKey, row.refresh_token_enc);
+    try {
+      return vaultDecrypt(this.vaultKey, row.refresh_token_enc);
+    } catch {
+      // The ciphertext does not open under the current key (a restore without
+      // the matching key, a corrupted row). It used to surface as a raw GCM
+      // authentication error that never reached the invalid_grant handler, so
+      // the user kept valid MCP tokens, saw an opaque failure on every call, and
+      // nothing prompted their client to reconnect. Treat it exactly like a dead
+      // grant: erase the unusable row and burn their MCP tokens, so the next
+      // request 401s and the client re-runs the connect flow on its own.
+      this.markGoogleRevoked(userId);
+      throw new Error(
+        "Your stored Google connection could not be read (the server's encryption key changed). " +
+        "Reconnect from your Claude client to sign in again."
+      );
+    }
   }
 
   /**

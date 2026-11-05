@@ -1,7 +1,7 @@
 import { google } from "googleapis";
 import { getAuthMode } from "../auth.js";
 import { getUserContext } from "../request-context.js";
-import { authenticateWithOAuth, getScopeTier } from "../oauth.js";
+import { authenticateWithOAuth, getScopeTier, readOnlyExplanation } from "../oauth.js";
 import * as fs from "fs";
 
 async function getIndexingClient() {
@@ -20,10 +20,13 @@ async function getIndexingClient() {
     );
   }
 
-  if (mode === "oauth" && getScopeTier() === "readonly") {
+  // Every mode, not only "oauth". The tier used to be consulted only when
+  // GSC_AUTH_MODE was "oauth", so a service-account install that set
+  // GSC_SCOPES=readonly (as .env.example tells operators to) was never refused:
+  // the service-account branch below asks Google for the Indexing scope directly.
+  if (getScopeTier() === "readonly") {
     throw new Error(
-      "URL submission needs full access, but this install is in read only mode (GSC_SCOPES=readonly). " +
-      "Re-run `node dist/index.js setup --reauth` and choose full access, then try again."
+      `URL submission needs full access, but ${readOnlyExplanation()}`
     );
   }
 

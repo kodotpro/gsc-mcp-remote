@@ -1,7 +1,9 @@
-import { parse, type HTMLElement } from "node-html-parser";
 import { imageDimensions, MEASURABLE_FORMATS } from "../image-dimensions.js";
 import exifr from "exifr";
 import { isRemoteMode } from "../runtime.js";
+import { boundedText } from "../guardrails.js";
+import { extractPageFacts, type ImgFact } from "../page-extract.js";
+import { pngMetadataView } from "../png-sanitize.js";
 import { safeFetch, BlockedUrlError } from "../net-guard.js";
 
 /**
@@ -38,7 +40,9 @@ const IMAGE_TIMEOUT_MS = 12000;
 const MAX_IMAGE_BYTES = Number(process.env.GSC_MAX_IMAGE_BYTES ?? 3 * 1024 * 1024);
 // HTML is parsed into a DOM, so it costs several times its wire size in
 // memory. Cap it well below the image ceiling.
-const MAX_PAGE_BYTES = 5 * 1024 * 1024;
+const MAX_PAGE_BYTES = Number(process.env.GSC_MAX_PAGE_BYTES ?? 2 * 1024 * 1024);
+/** One call may chain up to 5 pages x 51 fetches; this bounds the whole thing. Read per call. */
+const auditDeadlineMs = (): number => Number(process.env.GSC_AUDIT_DEADLINE_MS ?? 90_000);
 
 const INDEX_MIN_WIDTH = 250;
 const INDEX_MIN_HEIGHT = 200;
@@ -346,7 +350,12 @@ async function auditImage(
 
   if (fetchMetadata && sniffed && METADATA_FORMATS.has(sniffed)) {
     try {
-      const meta = await exifr.parse(buffer, {
+      // exifr inflates a PNG colour profile with no limit, so it is only ever given
+      // a rebuilt PNG holding the few chunks it needs (or nothing, if the file's
+      // structure cannot be walked).
+      const metaInput = sniffed === "png" ? pngMetadataView(buffer) : buffer;
+      if (metaInput === null) throw new Error("PNG chunk structure not walkable");
+      const meta = await exifr.parse(metaInput, {
         tiff: true,
         exif: true,
         gps: true,
@@ -400,11 +409,20 @@ export async function imagePageAudit(
   // Clamp here too, not only in the tool schema: this function is exported and
   // composed from elsewhere, and the number multiplies in-flight fetches.
   maxImagesPerPage = Math.max(1, Math.min(50, Math.floor(maxImagesPerPage) || 12));
+  // A negative count slices from the END of the findings, and an unbounded one
+  // multiplies the response; bound it here as well as in the schema.
+  maxImagesReported = Math.max(1, Math.min(100, Math.floor(maxImagesReported) || 20));
   const audits: PageAudit[] = [];
+  const deadline = Date.now() + auditDeadlineMs();
 
   for (const rawUrl of urls.slice(0, 5)) {
     const audit: PageAudit = { url: rawUrl, status: "ok", http_status: null };
     audits.push(audit);
+    if (Date.now() > deadline) {
+      audit.status = "fetch_failed";
+      audit.error = "Not audited: the overall time limit for one call was reached before this page. Run it again on its own.";
+      continue;
+    }
 
     let response: Awaited<ReturnType<typeof fetchGuarded>>;
     try {
@@ -427,22 +445,25 @@ export async function imagePageAudit(
     }
 
     const html = response.body.toString("utf8");
-    const root = parse(html);
+    // The real parser runs in a worker under a hard timeout; see page-extract.ts.
+    let facts: Awaited<ReturnType<typeof extractPageFacts>>;
+    try {
+      facts = await extractPageFacts(html);
+    } catch (error) {
+      audit.status = "fetch_failed";
+      audit.error = error instanceof Error ? error.message : String(error);
+      continue;
+    }
     const pageUrl = response.url || rawUrl;
 
     // ── Page-level checks ────────────────────────────────────────────
-    const robotsContent = root
-      .querySelectorAll('meta[name="robots"], meta[name="googlebot"]')
-      .map((m: HTMLElement) => m.getAttribute("content") ?? "")
-      .join(",");
-    const previewMatch = robotsContent.match(/max-image-preview:\s*(\w+)/i);
+    const previewMatch = facts.robotsContent.match(/max-image-preview:\s*(\w+)/i);
 
-    const ldBlocks = root.querySelectorAll('script[type="application/ld+json"]');
     const imageObjects: Record<string, unknown>[] = [];
     let hasPrimaryImage = false;
-    for (const block of ldBlocks) {
+    for (const text of facts.ldTexts) {
       try {
-        const json = JSON.parse(block.textContent);
+        const json = JSON.parse(text);
         walkForImageObjects(json, imageObjects);
         if (JSON.stringify(json).includes("primaryImageOfPage")) hasPrimaryImage = true;
       } catch {
@@ -453,39 +474,28 @@ export async function imagePageAudit(
       (o) => o.license || o.acquireLicensePage || o.creditText || o.copyrightNotice
     );
 
-    const backgroundCount = root
-      .querySelectorAll("[style]")
-      .filter((el: HTMLElement) =>
-        /background(-image)?\s*:\s*url\(/i.test(el.getAttribute("style") ?? "")
-      ).length;
-
-    const modernSources = root
-      .querySelectorAll("picture source")
-      .some((s: HTMLElement) => /image\/(avif|webp)/i.test(s.getAttribute("type") ?? ""));
+    const backgroundCount = facts.backgroundCount;
+    const modernSources = facts.modernSources;
 
     // ── Collect content images ───────────────────────────────────────
-    const imgElements = root.querySelectorAll("img");
     interface Candidate {
-      el: HTMLElement;
+      img: ImgFact;
       src: string;
       jsLazy: boolean;
     }
     const candidates: Candidate[] = [];
     const seen = new Set<string>();
-    for (const el of imgElements) {
+    for (const img of facts.imgs) {
       // JS lazy-loaders (WP Rocket, Smush, LiteSpeed, Autoptimize) put an
       // inline data: placeholder in src and the real URL in a data-* attr,
       // so a data: src means "unset", not "skip the image".
-      const attrSrc = el.getAttribute("src");
+      const attrSrc = img.src;
       const directSrc = attrSrc && !attrSrc.startsWith("data:") ? attrSrc : null;
-      const lazySrc =
-        el.getAttribute("data-src") ??
-        el.getAttribute("data-lazy-src") ??
-        el.getAttribute("data-original");
+      const lazySrc = img.lazySrc;
       let src =
         directSrc ??
         lazySrc ??
-        (el.getAttribute("srcset") ?? "").split(/[\s,]+/)[0] ??
+        (img.srcset ?? "").split(/[\s,]+/)[0] ??
         "";
       if (!src || src.startsWith("data:")) continue;
       try {
@@ -495,12 +505,12 @@ export async function imagePageAudit(
       }
       if (seen.has(src)) continue;
       seen.add(src);
-      candidates.push({ el, src, jsLazy: directSrc === null && lazySrc !== null });
+      candidates.push({ img, src, jsLazy: directSrc === null && lazySrc !== null });
     }
 
     const isIconLike = (c: Candidate): boolean => {
-      const w = Number(c.el.getAttribute("width") ?? "0");
-      const h = Number(c.el.getAttribute("height") ?? "0");
+      const w = Number(c.img.width ?? "0");
+      const h = Number(c.img.height ?? "0");
       if ((w && w < 100) || (h && h < 100)) return true;
       return /logo|icon|avatar|favicon|badge|emoji/i.test(c.src);
     };
@@ -514,7 +524,7 @@ export async function imagePageAudit(
     // Duplicate alt detection across the page.
     const altCounts = new Map<string, number>();
     for (const c of contentImages) {
-      const alt = c.el.getAttribute("alt");
+      const alt = c.img.alt;
       if (alt && alt.trim()) {
         const key = alt.trim().toLowerCase();
         altCounts.set(key, (altCounts.get(key) ?? 0) + 1);
@@ -527,17 +537,16 @@ export async function imagePageAudit(
     // ── Per-image findings ───────────────────────────────────────────
     const findings: ImageFinding[] = [];
     for (const c of contentImages) {
-      const alt = c.el.hasAttribute("alt") ? (c.el.getAttribute("alt") ?? "") : null;
+      const alt = c.img.hasAlt ? (c.img.alt ?? "") : null;
       const finding: ImageFinding = {
         src: c.src,
         alt,
         alt_status: classifyAlt(alt, c.src, duplicateAlts),
         filename_status: classifyFilename(c.src),
-        has_width_height_attrs:
-          c.el.hasAttribute("width") && c.el.hasAttribute("height"),
-        loading: c.el.getAttribute("loading") ?? (c.jsLazy ? "lazy" : null),
-        fetchpriority: c.el.getAttribute("fetchpriority") ?? null,
-        has_srcset: c.el.hasAttribute("srcset") || c.el.hasAttribute("data-srcset"),
+        has_width_height_attrs: c.img.hasWidth && c.img.hasHeight,
+        loading: c.img.loading ?? (c.jsLazy ? "lazy" : null),
+        fetchpriority: c.img.fetchpriority ?? null,
+        has_srcset: c.img.hasSrcset,
         fetched: false,
         format: null,
         bytes: null,
@@ -552,10 +561,13 @@ export async function imagePageAudit(
       findings.push(finding);
     }
 
-    const toFetch = findings
-      .filter((f) => fetchable.some((c) => c.src === f.src))
-      .slice(0, maxImagesPerPage);
+    const fetchableSrcs = new Set(fetchable.map((c) => c.src));
+    const toFetch = findings.filter((f) => fetchableSrcs.has(f.src)).slice(0, maxImagesPerPage);
     for (const finding of toFetch) {
+      if (Date.now() > deadline) {
+        audit.error = "Stopped early: the overall time limit for one call was reached, so later images on this page were not fetched.";
+        break;
+      }
       try {
         Object.assign(finding, await auditImage(finding.src, fetchMetadata));
       } catch {
@@ -574,7 +586,7 @@ export async function imagePageAudit(
     }
 
     const lcpLazy = lcpCandidate
-      ? (lcpCandidate.el.getAttribute("loading") ?? "").toLowerCase() === "lazy" ||
+      ? (lcpCandidate.img.loading ?? "").toLowerCase() === "lazy" ||
         lcpCandidate.jsLazy
       : null;
 
@@ -596,12 +608,12 @@ export async function imagePageAudit(
     if (!previewMatch) topFixes.push("Add max-image-preview:large to the robots meta for full-size previews");
 
     audit.page_checks = {
-      total_img_tags: imgElements.length,
+      total_img_tags: facts.totalImgTags,
       content_images: contentImages.length,
       images_fetched: toFetch.length,
       lcp_candidate_src: lcpCandidate?.src ?? null,
       lcp_candidate_lazy_loaded: lcpLazy,
-      lcp_candidate_fetchpriority: lcpCandidate?.el.getAttribute("fetchpriority") ?? null,
+      lcp_candidate_fetchpriority: lcpCandidate?.img.fetchpriority ?? null,
       inline_background_images: backgroundCount,
       max_image_preview: previewMatch ? previewMatch[1].toLowerCase() : "not_set",
       image_object_schema_count: imageObjects.length,
@@ -629,5 +641,30 @@ export async function imagePageAudit(
       "empty alt (alt=\"\") is correct for decorative images; it is reported but not counted as an issue.",
   };
 
+  boundThirdPartyText(audits);
   return { audits, overall };
+}
+
+/**
+ * Everything below is text the page's author (or the page's server) chose, and
+ * it goes into the model's context unchanged. Cap and flatten it. Classification
+ * (generic alt, filename-as-alt, duplicates) has already run on the full values.
+ */
+function boundThirdPartyText(audits: PageAudit[]): void {
+  for (const a of audits) {
+    if (a.error) a.error = boundedText(a.error, 300);
+    if (a.page_checks) {
+      if (a.page_checks.lcp_candidate_src) a.page_checks.lcp_candidate_src = boundedText(a.page_checks.lcp_candidate_src, 500);
+      if (a.page_checks.lcp_candidate_fetchpriority) a.page_checks.lcp_candidate_fetchpriority = boundedText(a.page_checks.lcp_candidate_fetchpriority, 24);
+      a.page_checks.max_image_preview = boundedText(a.page_checks.max_image_preview, 24);
+    }
+    for (const img of a.images ?? []) {
+      img.src = boundedText(img.src, 500);
+      if (img.alt !== null) img.alt = boundedText(img.alt, 300);
+      if (img.loading) img.loading = boundedText(img.loading, 24);
+      if (img.fetchpriority) img.fetchpriority = boundedText(img.fetchpriority, 24);
+      if (img.format) img.format = boundedText(img.format, 64);
+      if (img.metadata?.digital_source_type) img.metadata.digital_source_type = boundedText(img.metadata.digital_source_type, 120);
+    }
+  }
 }

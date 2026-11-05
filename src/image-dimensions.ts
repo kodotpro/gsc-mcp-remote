@@ -158,21 +158,30 @@ function tiff(b: Buffer): Dimensions | null {
   return plausible(width, height);
 }
 
+/** How much of an SVG is examined: the root tag sits in the first few KB. */
+const SVG_HEAD_BYTES = 16384;
+
 /**
  * SVG: width/height attributes if they carry usable units, else the viewBox.
  *
- * Only the opening tag is examined, and only the first 64 KB of it, so a huge
- * or hostile document cannot turn this into real work. Percentage widths are
- * ignored on purpose — they describe layout, not intrinsic size.
+ * Only the opening tag is examined, and only the first 16 KB, so a huge or
+ * hostile document cannot turn this into real work. Every search here is
+ * linear: the root tag is located with ONE scan and its end with ONE indexOf.
+ * The previous `/<svg\b[^>]*>/` restarted its "[^>]*" run from every "<svg" in
+ * a 64 KB document with no ">" in it, which is quadratic. Percentage widths are
+ * ignored on purpose; they describe layout, not intrinsic size.
  */
 function svg(b: Buffer): Dimensions | null {
-  const head = b.subarray(0, 65536).toString("utf8");
-  const tag = head.match(/<svg\b[^>]*>/i);
-  if (!tag) return null;
-  const open = tag[0];
+  const head = b.subarray(0, SVG_HEAD_BYTES).toString("utf8");
+  const start = head.search(/<svg[\s>/]/i);
+  if (start < 0) return null;
+  const end = head.indexOf(">", start);
+  const open = head.slice(start, end < 0 ? head.length : end + 1);
 
   const attr = (name: string): number | undefined => {
-    const m = open.match(new RegExp(`\\b${name}\\s*=\\s*["']?\\s*([0-9.]+)\\s*(px)?\\s*["']?`, "i"));
+    // Not "data-width", and only a bare number or px: "100%" and "10em" describe
+    // layout, not intrinsic size, so they fall through to the viewBox.
+    const m = open.match(new RegExp(`(?<![\\w:-])${name}\\s*=\\s*["']?([0-9.]+)(?:px)?(?=["'\\s/>])`, "i"));
     if (!m) return undefined;
     const n = Number.parseFloat(m[1]);
     return Number.isFinite(n) ? n : undefined;

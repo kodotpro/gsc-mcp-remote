@@ -72,9 +72,14 @@ Each of these is asserted by a test in `scripts/`, so a regression is a build
 failure rather than a surprise:
 
 - MCP tokens are random and stored only as SHA-256 hashes; the database holds
-  nothing directly usable as a credential
+  no usable MCP token and no usable Google credential. (Registered clients'
+  own secrets are stored as the SDK issues them: 256 random bits that mean
+  something only together with a valid authorization code and PKCE verifier)
 - Google refresh tokens are encrypted with AES-256-GCM under a key held outside
-  the database, in a `0600` file
+  the database, in a `0600` file. The database and its WAL/SHM files are `0600`
+  too, whatever the host umask. The server refuses to start with a missing or
+  mismatched key beside stored tokens instead of minting a new one (override:
+  `GSC_ALLOW_NEW_VAULT_KEY=1`)
 - Access tokens expire in an hour; refresh tokens rotate on use, and replaying a
   rotated one revokes every token that client held for that user
 - Tokens are audience-bound (RFC 8707); one minted for another resource is
@@ -101,11 +106,30 @@ failure rather than a surprise:
   link-local, CGNAT, reserved, IPv4-mapped/compatible/translated or NAT64
   addresses; the address is re-validated at connect time, and every redirect hop
   re-checked
-- Fetches are bounded in both time and bytes; image dimensions are read by a
+- Fetches are bounded in both time and bytes. The HTML parser runs in a worker
+  thread under a hard timeout, so a hostile page cannot stall the event loop all
+  tenants share; exifr only ever sees a rebuilt PNG holding the few chunks it
+  needs (it inflates a colour profile without limit); image dimensions are read by a
   first-party parser with no unbounded loops, dispatched on the format the
   file's own magic bytes declare rather than a server-supplied Content-Type
-- Per-user mode requests only `webmasters.readonly`, and the write tools refuse
-  to run in it
+- Per-user mode requests `webmasters.readonly` for Search Console data, plus
+  `openid` and `email` solely to identify the account; the write tools
+  (`submit_url`, `submit_batch`, `submit_sitemap`) refuse to run in it, and
+  `GSC_SCOPES` fails closed: unset or empty means `full`, and any other value
+  that is not a spelling of read-only is read-only too, with a warning
+- The per-user request budget counts JSON-RPC messages and applies to every
+  `/mcp` request, so a batch, a session-churn loop or a probe against unknown
+  sessions cannot sidestep it
+- Every tool declares MCP annotations (`readOnlyHint`, `destructiveHint`,
+  `openWorldHint`), which is what lets a client put its own approval prompt in
+  front of a destructive call. `disconnect_account` takes a server-issued
+  single-use token across two calls; that forces a second, separate call but is
+  **not** an approval by the person (the token is returned to the same model), so
+  the client's prompt for destructive tools is the real gate. `set_default_property`
+  accepts only a property the account really has. Results from the data tools carry
+  an `untrusted_text` notice, and the two tools that surface raw page attributes
+  and search prompts (`image_page_audit`, `genai_conversation_queries`) cap and
+  flatten that text (invisible and bidi characters included)
 
 ## Notes for operators
 
@@ -116,6 +140,11 @@ failure rather than a surprise:
 - **Keep the container on loopback.** The compose file publishes to `127.0.0.1`
   deliberately; the reverse proxy should be the only thing that reaches it.
 - **Prefer `readonly`** for any shared or hosted deployment.
+- **Secure the host paths yourself.** The runbook's `chmod` steps cover `.env`,
+  the data directory and the secrets. Other accounts on the same host can read
+  what those permissions allow.
+- **Behind Cloudflare, restore the client address in nginx** (see the runbook's
+  "Behind Cloudflare"), or per-IP limits collapse onto the proxy's addresses.
 - **Set `GSC_HTTP_ALLOWED_HOSTS`.** Binding `0.0.0.0` disables the SDK's
   localhost-only host check, so the public hostname must be listed explicitly.
 - **No accepted advisories.** The tree is clean, and CI fails the build on any

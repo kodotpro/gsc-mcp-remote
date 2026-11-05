@@ -12,11 +12,11 @@ Data handling in the hosted deployment: the user's Google refresh token is store
 
 Source code: https://github.com/kodotpro/gsc-mcp-remote
 
-The hosted service requests **only the read-only scope**. It cannot modify anything in a user's Search Console account.
+The hosted service requests **only the read-only Search Console scope**, plus the basic `openid` and `email` scopes that identify the signed-in account (they are not sensitive or restricted). It cannot modify anything in a user's Search Console account.
 
 ## https://www.googleapis.com/auth/webmasters.readonly
 
-The only scope requested. It powers every tool in the hosted service:
+The only Search Console scope requested (sign-in also uses `openid` and `email`, solely to identify the account). It powers every tool in the hosted service:
 
 - **Search analytics** (`searchanalytics.query`) — keyword, page, device, country and image-search reports, which are the substance of every analysis tool
 - **`sites.list`** — so the user can see and choose which of their own verified properties to analyse. Without it the assistant cannot tell the user what is available and the user must type exact property identifiers by hand

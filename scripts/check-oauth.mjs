@@ -414,6 +414,19 @@ const info2 = await provider.verifyAccessToken(tokens2.access_token);
 const userId = info2.extra.userId;
 
 check("google refresh token retrievable from vault", provider.getGoogleRefreshToken(userId) === "google-rt-1");
+{
+  // SECURITY.md promises these two; they are asserted here rather than assumed.
+  const sha256 = (v) => createHash("sha256").update(v).digest("hex");
+  const hashes = db.prepare("SELECT token_hash FROM access_tokens UNION ALL SELECT token_hash FROM refresh_tokens").all().map((r) => r.token_hash);
+  check("MCP tokens are stored only as SHA-256 hashes", hashes.includes(sha256(tokens2.access_token)) && hashes.includes(sha256(tokens2.refresh_token)) && !hashes.includes(tokens2.access_token) && !hashes.includes(tokens2.refresh_token));
+  // every table, found in the database itself: a table added later cannot escape this
+  const tableNames = db.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%'").all().map((r) => r.name);
+  const everything = JSON.stringify(tableNames.map((t) => db.prepare(`SELECT * FROM ${t}`).all()));
+  check("(control) the plaintext scan covers every table the schema has", tableNames.length >= 8 && tableNames.includes("access_tokens") && tableNames.includes("google_tokens"), tableNames.join(","));
+  check("no table holds a plaintext MCP token anywhere", !everything.includes(tokens2.access_token) && !everything.includes(tokens2.refresh_token));
+  const enc = db.prepare("SELECT refresh_token_enc FROM google_tokens WHERE user_id = ?").get(userId).refresh_token_enc;
+  check("the Google refresh token is stored only as vault ciphertext", /^v1:/.test(enc) && !everything.includes("google-rt-1"));
+}
 provider.setDefaultProperty(userId, "sc-domain:example.com");
 check("per-user default property persists", provider.getDefaultProperty(userId) === "sc-domain:example.com");
 
@@ -421,6 +434,228 @@ provider.markGoogleRevoked(userId);
 await expectThrow("cascade: MCP access token dies with the Google grant", () => provider.verifyAccessToken(tokens2.access_token));
 await expectThrow("cascade: refresh token dies too", () => provider.exchangeRefreshToken(client, tokens2.refresh_token));
 await expectThrow("cascade: vault refuses a revoked connection", () => Promise.resolve(provider.getGoogleRefreshToken(userId)), "reconnect");
+
+// ---------------------------------------------------------------------------
+console.log("\nData files and the vault key fail closed");
+// ---------------------------------------------------------------------------
+// Two operator mistakes used to end badly and silently. A pre-created data
+// directory left the database world-readable (0644), so any other local account
+// could read every user's email, token hashes and registered clients' secrets.
+// And a missing or mismatched key file made the server mint a fresh key and
+// report healthy while every stored Google token became undecryptable. These
+// assert the failures themselves, not the mechanisms.
+{
+  const vdir = fs.mkdtempSync(path.join(tmp, "vault-safety-"));
+  const sha = (v) => createHash("sha256").update(v).digest("hex");
+  const mode = (f) => fs.statSync(f).mode & 0o777;
+
+  // --- database files ---
+  const prevUmask = process.umask(0o022); // a typical host default: 0644 files
+  const dbFile = path.join(vdir, "perm.db");
+  const d0 = openAuthDb(dbFile);
+  d0.close();
+  fs.chmodSync(dbFile, 0o644); // what a previous version (or the runbook) left behind
+  const d1 = openAuthDb(dbFile);
+  d1.prepare("INSERT INTO users (id, google_sub, email, created_at, last_seen_at) VALUES ('u','s','e@example.com',1,1)").run();
+  check("ATTACK: a world-readable database from an earlier install is made private", (mode(dbFile) & 0o077) === 0, mode(dbFile).toString(8));
+  for (const suffix of ["-wal", "-shm"]) {
+    const f = dbFile + suffix;
+    check(`its ${suffix} companion exists and is private too`, fs.existsSync(f) && (mode(f) & 0o077) === 0, fs.existsSync(f) ? mode(f).toString(8) : "missing");
+  }
+  d1.close();
+  process.umask(prevUmask);
+
+  // --- the key file itself ---
+  const kp = path.join(vdir, "k1.key");
+  const k1 = loadOrCreateVaultKey(kp);
+  const ct = vaultEncrypt(k1, "rt-A");
+  fs.chmodSync(kp, 0o644);
+  loadOrCreateVaultKey(kp, { sampleCiphertexts: () => [ct] });
+  check("a group/world-readable key file is repaired to 0600", mode(kp) === 0o600, mode(kp).toString(8));
+  // A key provided through a symlink (a Kubernetes secret volume, an /etc layout)
+  // is legitimate; what must be a regular file is the thing it points at.
+  const linkPath = path.join(vdir, "link.key");
+  fs.symlinkSync(kp, linkPath);
+  check("a symlinked key file whose target is a regular file is accepted", loadOrCreateVaultKey(linkPath, { sampleCiphertexts: () => [ct] }).equals(k1));
+  const dirLink = path.join(vdir, "dir.key");
+  fs.mkdirSync(path.join(vdir, "a-directory"));
+  fs.symlinkSync(path.join(vdir, "a-directory"), dirLink);
+  await expectThrow("a key path that resolves to a directory is refused", () => loadOrCreateVaultKey(dirLink), "regular file");
+  // A key we cannot chmod (read-only mount, another owner) must not stop boot.
+  const roKey = path.join(vdir, "ro.key");
+  fs.writeFileSync(roKey, k1.toString("hex") + "\n", { mode: 0o644 });
+  // The compiled module reads fs through live bindings to the CommonJS module, so
+  // patch that (an ESM namespace object cannot be assigned to).
+  const fsCjs = createRequire(import.meta.url)("node:fs");
+  const realChmod = fsCjs.chmodSync;
+  fsCjs.chmodSync = () => { throw Object.assign(new Error("EPERM: operation not permitted"), { code: "EPERM" }); };
+  let roLoaded;
+  try { roLoaded = loadOrCreateVaultKey(roKey, { sampleCiphertexts: () => [ct] }); } catch (e) { roLoaded = e; } finally { fsCjs.chmodSync = realChmod; }
+  check("a key file that cannot be chmod-ed warns and still loads (boot is not bricked)", Buffer.isBuffer(roLoaded) && roLoaded.equals(k1), String(roLoaded?.message ?? ""));
+  // A corrupt key under the recovery flag is moved aside and replaced; without the flag the error says so.
+  const badKey = path.join(vdir, "corrupt.key");
+  fs.writeFileSync(badKey, "deadbeef\n", { mode: 0o600 });
+  await expectThrow("a corrupt key file is refused without the flag, and the message names the flag", () => loadOrCreateVaultKey(badKey, { sampleCiphertexts: () => [] }), "GSC_ALLOW_NEW_VAULT_KEY");
+  const replaced = loadOrCreateVaultKey(badKey, { sampleCiphertexts: () => [], allowReplacement: true });
+  check("...and under the flag it is moved aside (not deleted) and a valid key created", replaced.length === 32 && fs.readdirSync(vdir).some((f) => f.startsWith("corrupt.key.invalid-")));
+
+  // --- a missing key beside a populated database ---
+  const kpGone = path.join(vdir, "gone.key");
+  await expectThrow(
+    "ATTACK/incident: a missing key beside vaulted tokens refuses to mint a new one",
+    () => loadOrCreateVaultKey(kpGone, { sampleCiphertexts: () => [ct] }),
+    "permanently undecryptable"
+  );
+  check("...and writes no replacement key", !fs.existsSync(kpGone));
+  const k2 = loadOrCreateVaultKey(kpGone, { sampleCiphertexts: () => [ct], allowReplacement: true });
+  check("explicit operator consent (GSC_ALLOW_NEW_VAULT_KEY) does create one", fs.existsSync(kpGone) && mode(kpGone) === 0o600);
+  check("first run on an empty database still just works", loadOrCreateVaultKey(path.join(vdir, "fresh.key"), { sampleCiphertexts: () => [] }).length === 32);
+
+  // --- the wrong key beside a populated database ---
+  await expectThrow(
+    "ATTACK/incident: a key that decrypts none of the stored tokens refuses to start",
+    () => loadOrCreateVaultKey(kpGone, { sampleCiphertexts: () => [ct] }),
+    "does not decrypt"
+  );
+  check("a key that opens at least one stored token is accepted", loadOrCreateVaultKey(kpGone, { sampleCiphertexts: () => [ct, vaultEncrypt(k2, "rt-B")] }).equals(k2));
+  check("operator consent lets a mismatched key through", loadOrCreateVaultKey(kpGone, { sampleCiphertexts: () => [ct], allowReplacement: true }).equals(k2));
+
+  // --- the request-time cascade for a row the current key cannot open ---
+  const cdb = openAuthDb(path.join(vdir, "cascade.db"));
+  const now = Date.now();
+  cdb.prepare("INSERT INTO users (id, google_sub, email, created_at, last_seen_at) VALUES ('uX','sX','x@example.com',?,?)").run(now, now);
+  cdb.prepare("INSERT INTO google_tokens (user_id, refresh_token_enc, scope, status, updated_at) VALUES ('uX', ?, 'webmasters.readonly', 'active', ?)").run(vaultEncrypt(k1, "rt-X"), now);
+  cdb.prepare("INSERT INTO access_tokens (token_hash, user_id, client_id, scopes, resource, expires_at, created_at) VALUES (?, 'uX', 'c', 'gsc:read', NULL, ?, ?)").run(sha("at-x"), now + 3600_000, now);
+  cdb.prepare("INSERT INTO refresh_tokens (token_hash, user_id, client_id, scopes, resource, expires_at, created_at, revoked) VALUES (?, 'uX', 'c', 'gsc:read', NULL, ?, ?, 0)").run(sha("rt-x"), now + 3600_000, now);
+  const wrongKeyProvider = new GscOAuthProvider({ db: cdb, vaultKey: k2, identity: fakeIdentity, resourceUrl: RESOURCE });
+  await expectThrow(
+    "an undecryptable vault entry asks the user to reconnect, not a raw crypto error",
+    () => Promise.resolve(wrongKeyProvider.getGoogleRefreshToken("uX")),
+    "Reconnect"
+  );
+  await expectThrow("...and the user's MCP access token dies with it, so the client re-runs the connect flow", () => wrongKeyProvider.verifyAccessToken("at-x"));
+  const row = cdb.prepare("SELECT refresh_token_enc, status FROM google_tokens WHERE user_id = 'uX'").get();
+  check("...and the unusable ciphertext is erased rather than retained", row.status === "revoked" && row.refresh_token_enc === "");
+  cdb.close();
+
+  // --- recovery is SELF-CLOSING: one flagged start, then normal starts ---
+  // The flag used to leave stale rows behind, so the NEXT start without it refused
+  // to boot ("the key opens none of the sampled rows") even though the key was right.
+  {
+    const { retireUnreadableVaultRows, sampleVaultedCiphertexts } = await import("../dist/auth/db.js");
+    const { canDecrypt } = await import("../dist/auth/crypto.js");
+    const rdb = openAuthDb(path.join(vdir, "recover.db"));
+    const rnow = Date.now();
+    for (const [i, key] of [[1, k1], [2, k1], [3, k1], [4, k2]]) {
+      rdb.prepare("INSERT INTO users (id, google_sub, email, created_at, last_seen_at) VALUES (?, ?, ?, ?, ?)").run(`r${i}`, `s${i}`, `r${i}@example.com`, rnow, rnow);
+      rdb.prepare("INSERT INTO google_tokens (user_id, refresh_token_enc, scope, status, updated_at) VALUES (?, ?, 'webmasters.readonly', 'active', ?)").run(`r${i}`, vaultEncrypt(key, `rt-${i}`), rnow);
+      rdb.prepare("INSERT INTO access_tokens (token_hash, user_id, client_id, scopes, resource, expires_at, created_at) VALUES (?, ?, 'c', 'gsc:read', NULL, ?, ?)").run(sha(`at-${i}`), `r${i}`, rnow + 3600_000, rnow);
+    }
+    // key k2 is now the key; r4 reconnected under it, r1..r3 are stale (the oldest rows, so any "first N" sample sees only them)
+    const retired = retireUnreadableVaultRows(rdb, (c) => canDecrypt(k2, c));
+    check("recovery erases exactly the connections the new key cannot open", retired === 3, `retired ${retired}`);
+    check("...and the reconnected user is untouched", rdb.prepare("SELECT status FROM google_tokens WHERE user_id = 'r4'").get().status === "active");
+    check("...their MCP tokens are revoked so the clients re-run sign-in", rdb.prepare("SELECT COUNT(*) AS n FROM access_tokens WHERE user_id IN ('r1','r2','r3')").get().n === 0 && rdb.prepare("SELECT COUNT(*) AS n FROM access_tokens WHERE user_id = 'r4'").get().n === 1);
+    const after = sampleVaultedCiphertexts(rdb);
+    check("ATTACK/incident: after recovery, the next start WITHOUT the flag accepts the key", (() => { try { return loadOrCreateVaultKey(kpGone, { sampleCiphertexts: () => after }).equals(k2); } catch { return false; } })());
+    rdb.close();
+  }
+
+  // --- the real server, end to end ---
+  // A populated database and NO key file: the process must exit non-zero with an
+  // explanation instead of starting and reporting healthy.
+  const bootDb = path.join(vdir, "boot.db");
+  const bdb = openAuthDb(bootDb);
+  bdb.prepare("INSERT INTO users (id, google_sub, email, created_at, last_seen_at) VALUES ('uB','sB','b@example.com',?,?)").run(now, now);
+  bdb.prepare("INSERT INTO google_tokens (user_id, refresh_token_enc, scope, status, updated_at) VALUES ('uB', ?, 'webmasters.readonly', 'active', ?)").run(vaultEncrypt(k1, "rt-B"), now);
+  bdb.close();
+  const BP = 21000 + Math.floor(Math.random() * 9000);
+  const boot = spawn("node", ["dist/index.js", "http"], {
+    env: {
+      ...process.env, GSC_HTTP_AUTH: "oauth", GSC_PUBLIC_URL: `http://127.0.0.1:${BP}`, GSC_HTTP_PORT: String(BP), GSC_HTTP_HOST: "127.0.0.1",
+      GSC_GOOGLE_CLIENT_ID: "dummy-client-id", GSC_GOOGLE_CLIENT_SECRET: "dummy-client-secret",
+      GSC_OAUTH_DB_FILE: bootDb, GSC_VAULT_KEY_FILE: path.join(vdir, "boot-missing.key"), HOME: vdir,
+    },
+    stdio: ["ignore", "ignore", "pipe"],
+  });
+  let bootErr = "";
+  boot.stderr.on("data", (c) => (bootErr += c.toString()));
+  const bootExit = await new Promise((resolve) => {
+    const t = setTimeout(() => { boot.kill(); resolve("timeout"); }, 15000);
+    boot.on("exit", (code) => { clearTimeout(t); resolve(code); });
+  });
+  check("ATTACK/incident: the real server refuses to start without the key beside a populated database", typeof bootExit === "number" && bootExit !== 0, `exit ${bootExit}`);
+  check("...and says why", /permanently undecryptable/.test(bootErr), bootErr.slice(0, 200));
+  check("...without having written a replacement key", !fs.existsSync(path.join(vdir, "boot-missing.key")));
+
+  // --- the documented recovery, end to end: ONE flagged start, then normal starts ---
+  const spawnServer = async (dbFile, keyFile, extra = {}) => {
+    const port = 21000 + Math.floor(Math.random() * 9000);
+    const child = spawn("node", ["dist/index.js", "http"], {
+      env: { ...process.env, GSC_HTTP_AUTH: "oauth", GSC_PUBLIC_URL: `http://127.0.0.1:${port}`, GSC_HTTP_PORT: String(port), GSC_HTTP_HOST: "127.0.0.1",
+        GSC_GOOGLE_CLIENT_ID: "dummy-client-id", GSC_GOOGLE_CLIENT_SECRET: "dummy-client-secret", GSC_OAUTH_DB_FILE: dbFile, GSC_VAULT_KEY_FILE: keyFile, HOME: vdir, ...extra },
+      stdio: ["ignore", "ignore", "pipe"],
+    });
+    let err = "";
+    child.stderr.on("data", (c) => (err += c.toString()));
+    let up = false;
+    for (let i = 0; i < 40 && !up && child.exitCode === null; i++) {
+      up = await fetch(`http://127.0.0.1:${port}/healthz`).then((r) => r.ok).catch(() => false);
+      if (!up) await new Promise((r) => setTimeout(r, 250));
+    }
+    const stop = () => new Promise((resolve) => { if (child.exitCode !== null) return resolve(); child.once("exit", resolve); child.kill("SIGTERM"); setTimeout(() => child.kill("SIGKILL"), 3000).unref(); });
+    return { up, err: () => err, stop, exitCode: () => child.exitCode };
+  };
+  const recDb = path.join(vdir, "recovery-e2e.db");
+  const rk = openAuthDb(recDb);
+  for (const i of [1, 2]) {
+    rk.prepare("INSERT INTO users (id, google_sub, email, created_at, last_seen_at) VALUES (?, ?, ?, ?, ?)").run(`e${i}`, `es${i}`, `e${i}@example.com`, now, now);
+    rk.prepare("INSERT INTO google_tokens (user_id, refresh_token_enc, scope, status, updated_at) VALUES (?, ?, 'webmasters.readonly', 'active', ?)").run(`e${i}`, vaultEncrypt(k1, `rt-e${i}`), now);
+  }
+  rk.close();
+  const recKey = path.join(vdir, "recovery-e2e.key"); // the original key is gone
+  const flagged = await spawnServer(recDb, recKey, { GSC_ALLOW_NEW_VAULT_KEY: "1" });
+  check("with GSC_ALLOW_NEW_VAULT_KEY=1 the server starts despite the missing key", flagged.up, flagged.err().slice(0, 200));
+  check("...and says what it erased", /erased 2 stored connection/.test(flagged.err()), flagged.err().slice(0, 200));
+  await flagged.stop();
+  const chk = openAuthDb(recDb);
+  const left = chk.prepare("SELECT COUNT(*) AS n FROM google_tokens WHERE refresh_token_enc <> ''").get().n;
+  chk.close();
+  check("the unreadable connections are gone from the database", left === 0, `${left} still stored`);
+  const normal = await spawnServer(recDb, recKey); // no flag
+  check("ATTACK/incident: the NEXT start, without the flag, boots (recovery closed itself)", normal.up, normal.err().slice(0, 240));
+  await normal.stop();
+}
+
+// ---------------------------------------------------------------------------
+console.log("\nThe authenticated hot path does not write on every request");
+// ---------------------------------------------------------------------------
+// verifyAccessToken used to UPDATE users.last_seen_at on every request. The
+// database is synchronous and shared by every tenant on one event loop, so each
+// of those was a commit that all other requests waited behind, and it ran
+// before any rate check.
+{
+  const hdb = openAuthDb(path.join(tmp, "hot-path.db"));
+  const hp = new GscOAuthProvider({ db: hdb, vaultKey, identity: fakeIdentity, resourceUrl: RESOURCE });
+  const hnow = Date.now();
+  const hsha = (v) => createHash("sha256").update(v).digest("hex");
+  hdb.prepare("INSERT INTO users (id, google_sub, email, created_at, last_seen_at) VALUES ('uH','sH','h@example.com',?,?)").run(hnow, 1);
+  hdb.prepare("INSERT INTO access_tokens (token_hash, user_id, client_id, scopes, resource, expires_at, created_at) VALUES (?, 'uH', 'c', 'gsc:read', NULL, ?, ?)").run(hsha("hot-at"), hnow + 3600_000, hnow);
+  const seen = () => hdb.prepare("SELECT last_seen_at AS t FROM users WHERE id = 'uH'").get().t;
+  await hp.verifyAccessToken("hot-at");
+  check("the first authenticated request records the user as seen", seen() >= hnow, String(seen()));
+  hdb.prepare("UPDATE users SET last_seen_at = 7 WHERE id = 'uH'").run();
+  for (let i = 0; i < 25; i++) await hp.verifyAccessToken("hot-at");
+  check("25 more requests within the interval write nothing", seen() === 7, `last_seen_at became ${seen()}`);
+  // ...but the stamp must still advance once the interval has passed, or "last
+  // seen" would freeze after the first request (a mutation the test above allows).
+  process.env.GSC_LAST_SEEN_INTERVAL_MS = "40";
+  await new Promise((r) => setTimeout(r, 90));
+  await hp.verifyAccessToken("hot-at");
+  check("after the interval the next request writes again", seen() > 7, `last_seen_at is ${seen()}`);
+  delete process.env.GSC_LAST_SEEN_INTERVAL_MS;
+  hdb.close();
+}
 
 // ---------------------------------------------------------------------------
 console.log("\nData deletion and export (the promises the privacy policy makes)");
@@ -508,6 +743,28 @@ try {
 
   const health = await (await fetch(`${BASE}/healthz`)).json();
   check("healthz reports oauth mode", health.auth === "oauth", JSON.stringify(health));
+  // Whatever the host's umask, the server's own files must be private: they
+  // hold every user's email, token hashes and registered clients' secrets.
+  for (const f of ["http.db", "http.db-wal", "http.db-shm", "http-vault.key"]) {
+    const full = path.join(tmp, f);
+    check(`the server created ${f} private (no group/other access)`, fs.existsSync(full) && (fs.statSync(full).mode & 0o077) === 0, fs.existsSync(full) ? (fs.statSync(full).mode & 0o777).toString(8) : "missing");
+  }
+
+  // The callback is an unauthenticated GET and its `error` query value used to
+  // be copied into the log line and onto this origin's own error page.
+  const inj = "x%0A%5Bsession%5D%20opened%20FORGED-LOG-LINE%3Cb%3E";
+  const cbForged = await fetch(`${BASE}/oauth/google/callback?error=${inj}`);
+  const cbForgedBody = await cbForged.text();
+  check(
+    "ATTACK: attacker text in the callback 'error' parameter is not reflected on the error page",
+    cbForged.status === 400 && !cbForgedBody.includes("FORGED-LOG-LINE") && cbForgedBody.includes("unrecognised error"),
+    `status ${cbForged.status}`
+  );
+  const cbKnown = await (await fetch(`${BASE}/oauth/google/callback?error=access_denied`)).text();
+  check("a documented Google error code is still shown to the person", cbKnown.includes("access_denied"));
+  await new Promise((r) => setTimeout(r, 300));
+  check("(control) the callback failures ARE logged, so the absence below means something", /google callback failed/.test(stderr));
+  check("ATTACK: ...and it is not written to the log either", !stderr.includes("FORGED-LOG-LINE"));
 
   const asMeta = await (await fetch(`${BASE}/.well-known/oauth-authorization-server`)).json();
   const norm = (u) => String(u ?? "").replace(/\/+$/, "");
@@ -713,12 +970,19 @@ try {
   const noDefaultText = noDefault?.result?.content?.[0]?.text ?? "";
   check("per-user context reaches tools (remote error text)", noDefaultText.includes("set_default_property"), noDefaultText.slice(0, 140));
 
+  // set_default_property persists a TRUSTED, durable value the model supplied, so
+  // it is stored only for a property the account is proven to have. This user has
+  // no Google connection, so nothing can be proven and nothing may be saved.
   const setDef = await (await rpc(TOKEN_A, sidA, { jsonrpc: "2.0", id: 5, method: "tools/call", params: { name: "set_default_property", arguments: { site_url: "sc-domain:seeded.example" } } })).json();
-  check("set_default_property saves for the user", (setDef?.result?.content?.[0]?.text ?? "").includes("sc-domain:seeded.example"));
+  const setDefText = setDef?.result?.content?.[0]?.text ?? JSON.stringify(setDef).slice(0, 200);
+  const readDb = new DatabaseSync(path.join(tmp, "http.db"));
+  const savedRow = readDb.prepare("SELECT default_property FROM user_settings WHERE user_id = 'user-a'").get();
+  readDb.close();
+  check("set_default_property saves nothing it cannot verify against the account's own properties", !savedRow && (setDef?.result?.isError === true || /reconnect|No active Google connection/.test(setDefText)), setDefText.slice(0, 160));
 
-  // Now the property resolves, and the next stop is the (absent) Google
-  // connection — which must fail with the clear reconnect message, not a crash.
-  const noGoogle = await (await rpc(TOKEN_A, sidA, { jsonrpc: "2.0", id: 6, method: "tools/call", params: { name: "quick_wins", arguments: {} } })).json();
+  // An explicit property still reaches the (absent) Google connection, which must
+  // fail with the clear reconnect message, not a crash.
+  const noGoogle = await (await rpc(TOKEN_A, sidA, { jsonrpc: "2.0", id: 6, method: "tools/call", params: { name: "quick_wins", arguments: { site_url: "sc-domain:seeded.example" } } })).json();
   const noGoogleText = noGoogle?.result?.content?.[0]?.text ?? JSON.stringify(noGoogle).slice(0, 140);
   check("missing Google connection fails with reconnect guidance", noGoogleText.includes("reconnect") || noGoogleText.includes("No active Google connection"), noGoogleText.slice(0, 140));
 } catch (err) {

@@ -50,6 +50,7 @@ import { type SiteInfo } from "./web-pages.js";
 import { PUBLIC_PAGES, llmsTxt, sitemapXml } from "./web-guides.js";
 import { FONT_ROUTES, IMAGE_ROUTES, canonicalBase } from "./web-theme.js";
 import { currentStars, startStarPolling } from "./github-stars.js";
+import { trimTrailingSlashes } from "./path-utils.js";
 
 type HttpAuthMode = "bearer" | "oauth";
 
@@ -83,21 +84,36 @@ const MAX_SESSIONS_PER_USER = Number(process.env.GSC_MAX_SESSIONS_PER_USER ?? 8)
 /** Tool calls allowed per user per minute (bearer mode counts as one user). */
 const RATE_LIMIT_PER_MIN = Number(process.env.GSC_RATE_LIMIT_PER_MIN ?? 60);
 
-/** Sliding-window counters, keyed by user id (or "shared" in bearer mode). */
+/** Fixed-window counters, keyed by user id (or "shared" in bearer mode). */
 const rateBuckets = new Map<string, { count: number; resetAt: number }>();
 
-function rateLimitExceeded(key: string): { limited: boolean; retryAfter: number } {
+/**
+ * Charges `cost` against the caller's per-minute budget.
+ *
+ * The unit of account is the JSON-RPC MESSAGE, not the HTTP request: the SDK
+ * accepts a batch of up to 100 messages in one POST, so charging one unit per
+ * request let a single connection do roughly a hundred times its budget. The
+ * charge is applied even when it overshoots, so retrying a refused batch does
+ * not reset the debt.
+ */
+function rateLimitExceeded(key: string, cost = 1): { limited: boolean; retryAfter: number } {
   const now = Date.now();
   const bucket = rateBuckets.get(key);
   if (!bucket || bucket.resetAt <= now) {
-    rateBuckets.set(key, { count: 1, resetAt: now + 60_000 });
-    return { limited: false, retryAfter: 0 };
+    rateBuckets.set(key, { count: cost, resetAt: now + 60_000 });
+    if (cost <= RATE_LIMIT_PER_MIN) return { limited: false, retryAfter: 0 };
+    return { limited: true, retryAfter: 60 };
   }
-  bucket.count += 1;
+  bucket.count += cost;
   if (bucket.count > RATE_LIMIT_PER_MIN) {
     return { limited: true, retryAfter: Math.max(1, Math.ceil((bucket.resetAt - now) / 1000)) };
   }
   return { limited: false, retryAfter: 0 };
+}
+
+/** Messages in a JSON-RPC body: a batch is an array and costs one per element. */
+function rpcCost(body: unknown): number {
+  return Array.isArray(body) ? Math.max(1, body.length) : 1;
 }
 
 /**
@@ -170,6 +186,27 @@ function sharedTokenMiddleware(expected: string): RequestHandler {
 }
 
 // ---------------------------------------------------------------------------
+
+/** The error codes Google's and RFC 6749's authorization endpoints can return. */
+const GOOGLE_AUTH_ERRORS = new Set([
+  "access_denied", "invalid_request", "unauthorized_client", "unsupported_response_type",
+  "invalid_scope", "server_error", "temporarily_unavailable", "interaction_required",
+  "login_required", "consent_required", "account_selection_required", "invalid_client",
+  "redirect_uri_mismatch", "admin_policy_enforced", "disabled_client", "org_internal",
+]);
+
+/** A caller-supplied `error` value, reduced to a known code or a fixed label. */
+export function safeGoogleError(raw: string): string {
+  return GOOGLE_AUTH_ERRORS.has(raw) ? raw : "unrecognised error";
+}
+
+/**
+ * Makes text safe for ONE log record: control characters (CR/LF forge extra
+ * records) become spaces and the length is bounded.
+ */
+export function logSafe(text: string): string {
+  return text.replace(/[\u0000-\u001f\u007f-\u009f\u2028\u2029]+/g, " ").slice(0, 300);
+}
 
 /** Fully-escaped error page; browser-facing OAuth routes render through this. */
 function errorPage(heading: string, detail: string): string {
@@ -328,8 +365,23 @@ export async function startHttpServer(): Promise<HttpServer> {
     const dbPath = process.env.GSC_OAUTH_DB_FILE ?? path.join(home, ".gsc-mcp", "oauth-server.db");
     const keyPath = process.env.GSC_VAULT_KEY_FILE ?? path.join(home, ".gsc-mcp", "vault.key");
 
+    // Everything this process creates from here on (the SQLite database, its
+    // WAL and shared-memory files, the vault key) is private to this user,
+    // whatever the host's default umask is. The database holds every user's
+    // email, token hashes and registered clients' secrets.
+    process.umask(0o077);
     const db = authModules.db.openAuthDb(dbPath);
-    const vaultKey = authModules.crypto.loadOrCreateVaultKey(keyPath);
+    const allowReplacement = process.env.GSC_ALLOW_NEW_VAULT_KEY === "1";
+    const vaultKey = authModules.crypto.loadOrCreateVaultKey(keyPath, {
+      sampleCiphertexts: () => authModules.db.sampleVaultedCiphertexts(db),
+      allowReplacement,
+    });
+    if (allowReplacement) {
+      // Make the recovery self-closing: erase what the key cannot open now, so
+      // the next start (without the flag) sees a consistent database.
+      const retired = authModules.db.retireUnreadableVaultRows(db, (c: string) => authModules.crypto.canDecrypt(vaultKey, c));
+      console.error(`[vault] GSC_ALLOW_NEW_VAULT_KEY=1: erased ${retired} stored connection(s) the key cannot open; those users will be asked to reconnect. Remove the flag before the next start.`);
+    }
     const identity = authModules.identity.googleIdentityFromEnv(publicUrl);
     const resourceUrl = `${publicUrl}/mcp`;
     const cookieSecure = publicUrl.startsWith("https:");
@@ -464,9 +516,17 @@ export async function startHttpServer(): Promise<HttpServer> {
    * Scoped to the registered pages: /mcp/ must keep working as it is.
    */
   const pagePaths = new Set(PUBLIC_PAGES.map((p) => p.path));
+  // A path longer than the longest page plus a few stray slashes cannot be the
+  // slash variant of a page, so it never reaches the trimming at all.
+  const maxPagePathLength = Math.max(...PUBLIC_PAGES.map((p) => p.path.length)) + 16;
   app.use((req: Request, res: Response, next) => {
-    if ((req.method === "GET" || req.method === "HEAD") && req.path.length > 1 && req.path.endsWith("/")) {
-      const bare = req.path.replace(/\/+$/, "");
+    if (
+      (req.method === "GET" || req.method === "HEAD") &&
+      req.path.length > 1 &&
+      req.path.length <= maxPagePathLength &&
+      req.path.endsWith("/")
+    ) {
+      const bare = trimTrailingSlashes(req.path);
       if (pagePaths.has(bare)) {
         const query = req.originalUrl.slice(req.path.length);
         res.redirect(301, bare + query);
@@ -506,7 +566,11 @@ export async function startHttpServer(): Promise<HttpServer> {
     res.type("application/xml").send(sitemapXml(base));
   });
 
-  // Unauthenticated liveness probe. Reveals nothing beyond "the process is up".
+  // Unauthenticated liveness and capacity probe. It reveals the version, auth
+  // mode, session and rate-limit settings, process memory and limiter
+  // saturation: operational detail, but nothing secret and nothing about any
+  // user. (The comment here used to say it revealed nothing beyond "the process
+  // is up", which was not true.)
   app.get("/healthz", (_req: Request, res: Response) => {
     res.json({
       status: "ok",
@@ -579,7 +643,11 @@ export async function startHttpServer(): Promise<HttpServer> {
       const code = typeof req.query.code === "string" ? req.query.code : "";
       const googleError = typeof req.query.error === "string" ? req.query.error : "";
       try {
-        if (googleError) throw new Error(`Google sign-in was not completed (${googleError}).`);
+        // Only Google's documented error codes are echoed. The value arrives on
+        // an unauthenticated GET, so anything else (it can carry newlines that
+        // forge log lines, or arbitrary text shown on this origin's own error
+        // page) is replaced by a fixed label.
+        if (googleError) throw new Error(`Google sign-in was not completed (${safeGoogleError(googleError)}).`);
         if (!state || !code) throw new Error("Missing state or code in Google's callback.");
         const browserToken = readCookie(req.headers.cookie, AUTH_COOKIE);
         const redirectTo = await provider.completeGoogleSignIn(state, code, browserToken);
@@ -588,7 +656,7 @@ export async function startHttpServer(): Promise<HttpServer> {
         res.redirect(redirectTo);
       } catch (err: unknown) {
         const message = err instanceof Error ? err.message : String(err);
-        console.error("[oauth] google callback failed:", message);
+        console.error("[oauth] google callback failed:", logSafe(message));
         res.setHeader("Set-Cookie", clearAuthCookieHeader(cookieSecure));
         res.status(400).type("html").send(errorPage("Sign-in didn't complete", message));
       }
@@ -641,8 +709,40 @@ export async function startHttpServer(): Promise<HttpServer> {
     };
   };
 
+  /**
+   * Per-user request budget: one tenant must not be able to saturate a shared
+   * box (or the account-wide Google quota) for everyone else.
+   *
+   * Applied to EVERY /mcp request, not only POSTs that carry a session id. It
+   * used to sit inside the session branch, so `initialize` (which allocates a
+   * whole McpServer), GET, DELETE and unknown-session probes were free: an
+   * authenticated user could churn sessions at over a thousand a second without
+   * the limiter ever counting one.
+   */
+  const refuseIfRateLimited = (req: Request, res: Response, cost: number): boolean => {
+    // A batch bigger than the whole per-minute budget can never be served, so say
+    // that plainly (and do not charge for it) instead of "retry in 60s" forever.
+    if (cost > RATE_LIMIT_PER_MIN) {
+      res.status(413).json({
+        jsonrpc: "2.0",
+        error: { code: -32000, message: `A batch of ${cost} messages exceeds the per-minute budget of ${RATE_LIMIT_PER_MIN}. Send smaller batches.` },
+        id: null,
+      });
+      return true;
+    }
+    const rl = rateLimitExceeded(userIdOf(req) ?? "shared", cost);
+    if (!rl.limited) return false;
+    res.status(429).set("Retry-After", String(rl.retryAfter)).json({
+      jsonrpc: "2.0",
+      error: { code: -32000, message: `Rate limit reached (${RATE_LIMIT_PER_MIN} requests/minute). Retry in ${rl.retryAfter}s.` },
+      id: null,
+    });
+    return true;
+  };
+
   app.post(MCP_PATHS, requireAuth, async (req: Request, res: Response) => {
     const sessionId = req.headers["mcp-session-id"] as string | undefined;
+    if (refuseIfRateLimited(req, res, rpcCost(req.body))) return;
 
     try {
       if (sessionId) {
@@ -656,19 +756,6 @@ export async function startHttpServer(): Promise<HttpServer> {
           return;
         }
         if (!ownsSession(req, res, session)) return;
-
-        // Per-user request budget: one tenant must not be able to saturate a
-        // shared box (or the account-wide Google quota) for everyone else.
-        const rlKey = userIdOf(req) ?? "shared";
-        const rl = rateLimitExceeded(rlKey);
-        if (rl.limited) {
-          res.status(429).set("Retry-After", String(rl.retryAfter)).json({
-            jsonrpc: "2.0",
-            error: { code: -32000, message: `Rate limit reached (${RATE_LIMIT_PER_MIN} requests/minute). Retry in ${rl.retryAfter}s.` },
-            id: null,
-          });
-          return;
-        }
 
         session.lastSeen = Date.now();
 
@@ -759,6 +846,7 @@ export async function startHttpServer(): Promise<HttpServer> {
   // GET opens the notification stream; DELETE ends a session. Ownership is
   // enforced here too — a session id alone must never be enough.
   const bySessionId = async (req: Request, res: Response) => {
+    if (refuseIfRateLimited(req, res, 1)) return;
     const sessionId = req.headers["mcp-session-id"] as string | undefined;
     const session = sessionId ? sessions.get(sessionId) : undefined;
     if (!session) {

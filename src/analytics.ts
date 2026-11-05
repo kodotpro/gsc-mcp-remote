@@ -35,8 +35,9 @@ export interface QueryParams {
  * in an array. A high-cardinality query (query+page dimensions over 16 months)
  * can return hundreds of thousands of rows, and on a shared host that is
  * enough to take the whole process — and every other tenant — down. Callers
- * that legitimately need more can raise it per call; the result says plainly
- * when a cut happened, so an answer is never quietly computed on partial data.
+ * that legitimately need more can raise it per call. fetchRows reports when a
+ * cut happened, but most tools call fetchAllRows, which discards that flag, so
+ * their responses do not yet say so; raise the ceiling for large properties.
  *
  * Why 25,000 and not more. Measured on the default container (384 MB heap):
  * 100,000 rows cost ~24 MB as objects, plus ~44 MB transient while the tool
@@ -47,8 +48,8 @@ export interface QueryParams {
  * so on a shared 2-vCPU host one enormous query made every other tenant wait.
  *
  * 25,000 is still far more than an analysis question needs — Google's own
- * per-page maximum is 25,000 — and truncation is always reported rather than
- * hidden. Raise GSC_MAX_TOTAL_ROWS on a box with memory to spare.
+ * per-page maximum is 25,000. Raise GSC_MAX_TOTAL_ROWS on a box with memory to
+ * spare.
  */
 export const MAX_TOTAL_ROWS = Number(process.env.GSC_MAX_TOTAL_ROWS ?? 25000);
 

@@ -165,6 +165,35 @@ try {
     problems.push(`PROPERTY_INDEPENDENT in src/site-content.ts no longer matches NO_SITE_URL here`);
   }
 
+  // -- annotations --------------------------------------------------------
+  // No tool used to declare any, so a client could not tell quick_wins (a read)
+  // from disconnect_account (an irreversible erase) and had no basis for
+  // gating the second on a person's approval. Tool output carries third-party
+  // text, and a model that reads it can be steered toward a state-changing tool;
+  // the hint is the part of the defence that does not depend on the model.
+  const CHANGES_STATE = new Set(["submit_url", "submit_batch", "submit_sitemap", "set_default_property", "disconnect_account", "generate_report"]);
+  const annotationOf = (name) => byName.get(name)?.annotations ?? {};
+  for (const t of tools) {
+    if (typeof t.annotations?.readOnlyHint !== "boolean") problems.push(`${t.name} declares no readOnlyHint annotation`);
+    // A tool must be classified on purpose: anything not on the state-changing
+    // list has to be read-only, so a new write tool cannot ship marked as a read.
+    if (!CHANGES_STATE.has(t.name) && t.annotations?.readOnlyHint !== true) {
+      problems.push(`${t.name} is not on the state-changing list but is not marked readOnlyHint`);
+    }
+  }
+  for (const name of ["submit_url", "submit_batch", "set_default_property", "disconnect_account", "submit_sitemap"]) {
+    if (annotationOf(name).readOnlyHint !== false) problems.push(`${name} changes state but is not marked readOnlyHint: false`);
+  }
+  if (annotationOf("generate_report").readOnlyHint !== false) problems.push("generate_report writes a file in stdio mode but is marked read-only");
+  if (annotationOf("disconnect_account").destructiveHint !== true) problems.push("disconnect_account erases data but is not marked destructiveHint");
+  if (annotationOf("disconnect_account").openWorldHint !== false) problems.push("disconnect_account only touches this server but is not marked closed-world");
+  for (const name of ["submit_url", "submit_batch"]) {
+    if (annotationOf(name).destructiveHint !== true) problems.push(`${name} can ask Google to drop a page (URL_DELETED) but is not marked destructiveHint`);
+  }
+  if (annotationOf("set_default_property").openWorldHint !== true) problems.push("set_default_property asks Google whether the account has the property but is marked closed-world");
+  if (annotationOf("image_page_audit").openWorldHint !== true) problems.push("image_page_audit fetches arbitrary hosts but is not marked openWorldHint");
+  if (annotationOf("quick_wins").readOnlyHint !== true) problems.push("quick_wins only reads but is not marked readOnlyHint");
+
   const expected = NEEDS_SITE_URL.length + NO_SITE_URL.length;
   if (tools.length !== expected) {
     problems.push(`expected ${expected} tools, found ${tools.length} — update this script if a tool was added deliberately`);
