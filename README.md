@@ -16,6 +16,8 @@ Paste that into Claude as a custom connector, sign in with your Google account, 
 
 Guides on [gsc.k-o.pro](https://gsc.k-o.pro/): [claude.ai and Claude Desktop](https://gsc.k-o.pro/claude) · [Claude Code](https://gsc.k-o.pro/claude-code) · [AI Mode queries](https://gsc.k-o.pro/ai-mode-queries) · [self-hosting](https://gsc.k-o.pro/self-host)
 
+Tool reference by group, with parameters and defaults: [opportunities](https://gsc.k-o.pro/tools/opportunities) · [diagnostics](https://gsc.k-o.pro/tools/diagnostics) · [lookups](https://gsc.k-o.pro/tools/lookups) · [image search](https://gsc.k-o.pro/tools/image-search). Every page there is also served as Markdown (add `.md` to the address, or send `Accept: text/markdown`); [`llms.txt`](https://gsc.k-o.pro/llms.txt) indexes them and [`llms-full.txt`](https://gsc.k-o.pro/llms-full.txt) is all of them in one file.
+
 > **A fork with credit due.** The 29-tool foundation and the analysis logic behind it are [Suganthan Mohanadasan's](https://suganthan.com) work, from [Suganthan's GSC MCP](https://github.com/Suganthan-Mohanadasan/Suganthans-GSC-MCP). This fork adds multi-property access and remote hosting on top. See [Credits](#credits).
 
 ---
