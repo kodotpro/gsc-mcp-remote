@@ -115,7 +115,10 @@ export function extractPageFacts(html: string): Promise<PageFacts> {
         const timeoutMs = parseTimeoutMs();
         const worker = new Worker(path.join(__dirname, "page-extract-worker.js"), {
           workerData: html,
-          resourceLimits: { maxOldGenerationSizeMb: 192, maxYoungGenerationSizeMb: 32, stackSizeMb: 4 },
+          // Measured: an extreme legitimate page (1.9 MB, 110,000 elements) needs
+          // 64-96 MB and is slow near 96. Two workers at this ceiling cost at most
+          // 256 MB, which has to fit beside the main process inside a 512 MB container.
+          resourceLimits: { maxOldGenerationSizeMb: 128, maxYoungGenerationSizeMb: 16, stackSizeMb: 4 },
         });
         let settled = false;
         const finish = (fn: () => void) => {

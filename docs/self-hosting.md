@@ -340,7 +340,7 @@ deployment needs.
 | `GSC_MAX_CONCURRENT_GSC_QUERIES` | 6 | Search Analytics queries in flight, process-wide |
 | `GSC_MAX_IMAGE_BYTES` | 3145728 | Per-image ceiling for `image_page_audit` |
 | `GSC_MAX_PAGE_BYTES` | 2097152 | Per-page ceiling for `image_page_audit` |
-| `GSC_PARSE_TIMEOUT_MS` | 2000 | How long the HTML parser (which runs in a worker thread) may take on one page before it is abandoned |
+| `GSC_PARSE_TIMEOUT_MS` | 2000 | How long the HTML parser (which runs in a worker thread, capped at 128 MB, two at a time) may take on one page before it is abandoned |
 | `GSC_AUDIT_DEADLINE_MS` | 90000 | After this long, one `image_page_audit` call starts no further page or image fetch (a fetch already running may finish; the call can overrun by up to one fetch's own timeout) |
 | `GSC_REPORT_DIR` | cwd | The only directory `generate_report` may write into |
 

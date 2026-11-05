@@ -772,6 +772,18 @@ console.log("\nimage_page_audit cannot be turned into a shared-process stall");
     check("...and that shape never stalled the event loop either", lag2 < 250, `${lag2.toFixed(0)} ms`);
     delete process.env.GSC_PARSE_TIMEOUT_MS;
 
+    // The worker's memory ceiling must not reject real pages: this is an extreme
+    // one (1.8 MB, 110,000 elements); it measured 64-96 MB against the 128 MB cap.
+    const bigPage = "<html><body>" + "<div class='a'><span>word</span><a href='/x'>l</a><img src='/i.png' alt='x'></div>".repeat(22_000) + "</body></html>";
+    const bigServer = http.createServer((q, r) => { r.writeHead(200, { "content-type": "text/html" }); r.end(bigPage); });
+    await new Promise((r) => bigServer.listen(0, "127.0.0.1", r));
+    try {
+      const big = await imagePageAudit([`http://127.0.0.1:${bigServer.address().port}/`], false, 4, 4);
+      check("an extreme but legitimate page (1.8 MB, 110,000 elements) is still audited", big.audits[0]?.status === "ok" && big.audits[0]?.page_checks?.total_img_tags === 22_000, big.audits[0]?.error ?? JSON.stringify(big.audits[0]?.page_checks ?? {}).slice(0, 100));
+    } finally {
+      await new Promise((r) => bigServer.close(r));
+    }
+
     const ok = await imagePageAudit([`${b2}/ok`], false, 4, 4);
     check("an ordinary page is still audited through the worker", ok.audits[0]?.status === "ok", JSON.stringify(ok.audits[0]).slice(0, 120));
 
