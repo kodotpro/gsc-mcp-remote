@@ -12,12 +12,31 @@ export type ScopeTier = "readonly" | "full";
 
 /**
  * GSC_SCOPES=readonly requests only webmasters.readonly, which keeps the
- * Google consent screen to a single read-only permission. The default is
- * "full" (read + sitemap submission + Indexing API) so existing installs
- * keep working exactly as before this option existed.
+ * Google consent screen to a single read-only permission. The default (the
+ * variable unset or empty) is "full" (read + sitemap submission + Indexing API)
+ * so existing installs keep working exactly as before this option existed.
+ *
+ * FAILS CLOSED on anything unrecognised. The parser used to compare against the
+ * exact string "readonly" and treat every other value as full, so a typo such as
+ * "read-only" or "Readonly " in a .env file, or a free-text field in the
+ * desktop bundle's settings, silently granted write and Indexing scopes to an
+ * operator who thought they had refused them. A value that is neither "full"
+ * nor a recognisable spelling of read-only is now read-only, with a warning.
  */
 export function getScopeTier(): ScopeTier {
-  return process.env.GSC_SCOPES?.toLowerCase() === "readonly" ? "readonly" : "full";
+  const raw = process.env.GSC_SCOPES?.trim().toLowerCase();
+  if (!raw || raw === "full") return "full";
+  if (!/^read[\s_-]?only$/.test(raw)) warnUnrecognisedScopes(process.env.GSC_SCOPES ?? "");
+  return "readonly";
+}
+
+let warnedUnrecognisedScopes = false;
+function warnUnrecognisedScopes(value: string): void {
+  if (warnedUnrecognisedScopes) return;
+  warnedUnrecognisedScopes = true;
+  console.error(
+    `[scopes] GSC_SCOPES="${value}" is not "full" or "readonly"; treating it as "readonly" so no write scope is requested by mistake.`
+  );
 }
 
 export function scopesForTier(tier: ScopeTier): string[] {

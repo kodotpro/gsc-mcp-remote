@@ -19,6 +19,10 @@ import { imageDimensions } from "../dist/image-dimensions.js";
 import { createLimiter, outboundFetchLimiter, googleFetchLimiter } from "../dist/concurrency.js";
 import { trimTrailingSlashes } from "../dist/path-utils.js";
 import { safeGoogleError, logSafe } from "../dist/http.js";
+import { getScopeTier } from "../dist/oauth.js";
+import { submitUrl, submitBatch } from "../dist/tools/submit-url.js";
+import { submitSitemap } from "../dist/tools/submit-sitemap.js";
+import { runWithUserContext } from "../dist/request-context.js";
 
 const failures = [];
 const check = (label, ok, detail = "") => {
@@ -394,6 +398,72 @@ check("a documented Google error code is kept", safeGoogleError("access_denied")
 check("ATTACK: anything else becomes a fixed label", safeGoogleError("x\n[session] opened FORGED") === "unrecognised error");
 check("ATTACK: log text cannot forge a second record", !/[\r\n]/.test(logSafe("one\r\ntwo\nthree\u2028four")));
 check("log text is bounded", logSafe("a".repeat(5000)).length === 300);
+
+// ---------------------------------------------------------------------------
+console.log("\nWrite tools and the scope tier fail closed");
+// ---------------------------------------------------------------------------
+// GSC_SCOPES=readonly is how an operator says "this install must not write".
+// Three things made that promise weaker than it looked: the parser treated any
+// spelling but the exact word "readonly" as full access, submit_url consulted
+// the tier only when GSC_AUTH_MODE was "oauth" (a service-account install
+// setting GSC_SCOPES=readonly, as .env.example advises, was never refused), and
+// submit_sitemap's hosted-mode guard keyed on that same stdio setting.
+{
+  const saved = { s: process.env.GSC_SCOPES, m: process.env.GSC_AUTH_MODE, k: process.env.GSC_KEY_FILE };
+  const restoreErr = console.error;
+  console.error = () => {}; // the unrecognised-value warning is expected below
+  const restore = () => {
+    for (const [k, v] of [["GSC_SCOPES", saved.s], ["GSC_AUTH_MODE", saved.m], ["GSC_KEY_FILE", saved.k]]) {
+      if (v === undefined) delete process.env[k]; else process.env[k] = v;
+    }
+  };
+  try {
+    const TIER = [
+      [undefined, "full"], ["", "full"], ["full", "full"], ["FULL", "full"],
+      ["readonly", "readonly"], [" Readonly ", "readonly"], ["read-only", "readonly"],
+      ["read_only", "readonly"], ["read only", "readonly"],
+      // a typo of either word must land on the safe side
+      ["ful", "readonly"], ["write", "readonly"], ["false", "readonly"], ["0", "readonly"],
+    ];
+    const wrong = [];
+    for (const [input, want] of TIER) {
+      if (input === undefined) delete process.env.GSC_SCOPES; else process.env.GSC_SCOPES = input;
+      if (getScopeTier() !== want) wrong.push(`${JSON.stringify(input)}=>${getScopeTier()}`);
+    }
+    check(`${TIER.length} GSC_SCOPES spellings resolve to the safe tier`, wrong.length === 0, wrong.join(", "));
+
+    // ATTACK: a service-account install that asked for read-only.
+    delete process.env.GSC_AUTH_MODE; // service_account, the default
+    process.env.GSC_KEY_FILE = "/nonexistent/key.json";
+    process.env.GSC_SCOPES = "readonly";
+    const u = await submitUrl("https://example.com/page");
+    check("ATTACK: submit_url refuses in service-account mode under GSC_SCOPES=readonly", u.success === false && /read only mode/.test(u.error ?? ""), u.error);
+    const b = await submitBatch(["https://example.com/a", "https://example.com/b"]);
+    check("ATTACK: submit_batch refuses every URL under GSC_SCOPES=readonly", b.summary.failed === 2 && b.results.every((r) => /read only mode/.test(r.error ?? "")), JSON.stringify(b.summary));
+    const sm = await submitSitemap("https://example.com/sitemap.xml", "sc-domain:example.com");
+    check("ATTACK: submit_sitemap refuses in service-account mode under GSC_SCOPES=readonly", sm.success === false && /read only mode/.test(sm.error ?? ""), sm.error);
+
+    // the guard must not strangle a deliberate full-tier install
+    process.env.GSC_SCOPES = "full";
+    const uf = await submitUrl("https://example.com/page");
+    check("a full-tier install is not refused by the tier (it proceeds to credentials)", uf.success === false && /GSC_KEY_FILE/.test(uf.error ?? ""), uf.error);
+
+    // ATTACK: the hosted per-user context must refuse sitemap writes by itself,
+    // whatever GSC_AUTH_MODE / GSC_SCOPES happen to be.
+    delete process.env.GSC_SCOPES;
+    const ctx = {
+      userId: "u-hosted", email: "u@example.com",
+      getSearchConsole: async () => { throw new Error("MUST NOT BE REACHED: no Google client may be built for a write"); },
+      settings: { getDefaultProperty: () => undefined, setDefaultProperty: () => {} },
+      account: { disconnect: () => ({ deleted: {} }), exportData: () => null },
+    };
+    const hosted = await runWithUserContext(ctx, () => submitSitemap("https://example.com/sitemap.xml", "sc-domain:example.com"));
+    check("ATTACK: submit_sitemap refuses for a hosted per-user context, before building any Google client", hosted.success === false && /hosted server/.test(hosted.error ?? ""), hosted.error);
+  } finally {
+    console.error = restoreErr;
+    restore();
+  }
+}
 
 if (failures.length > 0) {
   console.error(`\nHardening tests: ${failures.length} failure(s).`);
