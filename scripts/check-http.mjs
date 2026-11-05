@@ -490,6 +490,21 @@ try {
     `got ${JSON.stringify(healthAtCap.perUserSessionLimit)}`
   );
 
+  // -- the trailing-slash middleware ---------------------------------------
+  // It runs on the raw path of every unauthenticated GET, so it must stay cheap
+  // and correct for hostile paths as well as ordinary ones.
+  {
+    const noFollow = { redirect: "manual" };
+    const slashed = await fetch(`${BASE}/claude///`, noFollow);
+    check("a known page with trailing slashes still answers 301 to the canonical URL", slashed.status === 301 && new URL(slashed.headers.get("location") ?? "", BASE).pathname === "/claude", `${slashed.status} ${slashed.headers.get("location")}`);
+    const t0 = performance.now();
+    const hostile = await fetch(`${BASE}/${"/".repeat(12_000)}x/`, noFollow);
+    const ms = performance.now() - t0;
+    check("ATTACK: a path of 12,000 slashes is answered promptly and is not redirected", hostile.status !== 301 && ms < 1500, `${hostile.status} in ${ms.toFixed(0)} ms`);
+    const mcpSlash = await fetch(`${BASE}/mcp/`, { method: "POST", headers: { "Content-Type": "application/json" }, body: "{}" });
+    check("/mcp/ keeps working as before (401 without a token, not a redirect)", mcpSlash.status === 401, String(mcpSlash.status));
+  }
+
   // -- rate limiting ---------------------------------------------------------
   // Each scenario gets its own short-lived server so it starts with a fresh
   // budget. Every one of them is an attack that used to go uncounted: the

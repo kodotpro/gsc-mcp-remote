@@ -416,8 +416,10 @@ console.log("\nWrite tools and the scope tier fail closed");
 // submit_sitemap's hosted-mode guard keyed on that same stdio setting.
 {
   const saved = { s: process.env.GSC_SCOPES, m: process.env.GSC_AUTH_MODE, k: process.env.GSC_KEY_FILE };
-  const restoreErr = console.error;
-  console.error = () => {}; // the unrecognised-value warning is expected below
+  // Silence ONLY the expected unrecognised-value warning, and only around the
+  // call that emits it: check() reports failures through console.error, so a
+  // blanket override here once swallowed every failure message in this block.
+  const quiet = (fn) => { const e = console.error; console.error = () => {}; try { return fn(); } finally { console.error = e; } };
   const restore = () => {
     for (const [k, v] of [["GSC_SCOPES", saved.s], ["GSC_AUTH_MODE", saved.m], ["GSC_KEY_FILE", saved.k]]) {
       if (v === undefined) delete process.env[k]; else process.env[k] = v;
@@ -434,7 +436,8 @@ console.log("\nWrite tools and the scope tier fail closed");
     const wrong = [];
     for (const [input, want] of TIER) {
       if (input === undefined) delete process.env.GSC_SCOPES; else process.env.GSC_SCOPES = input;
-      if (getScopeTier() !== want) wrong.push(`${JSON.stringify(input)}=>${getScopeTier()}`);
+      const got = quiet(() => getScopeTier());
+      if (got !== want) wrong.push(`${JSON.stringify(input)}=>${got}`);
     }
     check(`${TIER.length} GSC_SCOPES spellings resolve to the safe tier`, wrong.length === 0, wrong.join(", "));
 
@@ -463,12 +466,14 @@ console.log("\nWrite tools and the scope tier fail closed");
       settings: { getDefaultProperty: () => undefined, setDefaultProperty: () => {} },
       account: { disconnect: () => ({ deleted: {} }), exportData: () => null },
     };
-    const hosted = await runWithUserContext(ctx, () => submitSitemap("https://example.com/sitemap.xml", "sc-domain:example.com"));
+    // A guard that is missing reaches the stub above, which throws; report that
+    // as a failed check rather than letting it crash the script unlabelled.
+    const hosted = await runWithUserContext(ctx, () => submitSitemap("https://example.com/sitemap.xml", "sc-domain:example.com"))
+      .catch((e) => ({ success: true, error: `THREW (the guard did not stop it): ${e.message}` }));
     check("ATTACK: submit_sitemap refuses for a hosted per-user context, before building any Google client", hosted.success === false && /hosted server/.test(hosted.error ?? ""), hosted.error);
     const hostedUrl = await runWithUserContext(ctx, () => submitUrl("https://example.com/page"));
     check("ATTACK: submit_url refuses for a hosted per-user context too", hostedUrl.success === false && /hosted server/.test(hostedUrl.error ?? ""), hostedUrl.error);
   } finally {
-    console.error = restoreErr;
     restore();
   }
 }
