@@ -10,8 +10,9 @@
  *
  * Everything either page claims is written from what the code does, because a
  * Google reviewer reads both on the same domain. Two claims are load-bearing
- * and true here: the hosted sign-in requests only `webmasters.readonly` (see
- * GOOGLE_SCOPES in auth/google-identity.ts), and `disconnect_account` erases
+ * and true here: the hosted sign-in requests one Search Console scope,
+ * `webmasters.readonly`, plus `openid` and `email` only to identify the account
+ * (see GOOGLE_SCOPES in auth/google-identity.ts), and `disconnect_account` erases
  * the stored credential rather than flagging it (see provider.disconnectUser).
  * The tool descriptions live in site-content.ts and are the ones registered in
  * server-factory.ts, and the three indexing tools are described as unavailable
@@ -324,10 +325,12 @@ export function landingPage(info: SiteInfo): string {
 
   <h2>What it reads, and what it stores</h2>
   <ul>
-    <li>It requests exactly one Google permission:
+    <li>It requests exactly one Search Console permission:
         <code>webmasters.readonly</code> — read-only access to Search Console.
-        It cannot change your site, submit URLs, or touch anything else in your
-        Google account.</li>
+        Signing in also uses Google's basic <code>openid</code> and
+        <code>email</code> scopes, only to identify your account. It cannot
+        change your site, submit URLs, or touch anything else in your Google
+        account.</li>
     <li>It stores your email address, your Google account identifier, and an
         encrypted Google refresh token, so it can answer your requests without
         asking you to sign in every time.</li>

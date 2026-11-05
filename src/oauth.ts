@@ -30,6 +30,19 @@ export function getScopeTier(): ScopeTier {
   return "readonly";
 }
 
+/**
+ * Why a write tool was refused, in terms of what the operator can actually fix.
+ * A mistyped value ("full access", "write") is read-only too, and telling that
+ * operator to re-run setup would send them in the wrong direction.
+ */
+export function readOnlyExplanation(): string {
+  const raw = process.env.GSC_SCOPES;
+  const typo = raw !== undefined && raw.trim() !== "" && !/^(full|read[\s_-]?only)$/i.test(raw.trim());
+  return typo
+    ? `GSC_SCOPES is "${raw}", which is not recognised, so this install is treated as read only. Set it to exactly "full" to allow writes.`
+    : "this install is in read only mode (GSC_SCOPES=readonly). Re-run `node dist/index.js setup --reauth` and choose full access, or set GSC_SCOPES=full.";
+}
+
 let warnedUnrecognisedScopes = false;
 function warnUnrecognisedScopes(value: string): void {
   if (warnedUnrecognisedScopes) return;

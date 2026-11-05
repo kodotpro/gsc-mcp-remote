@@ -500,7 +500,10 @@ try {
     const t0 = performance.now();
     const hostile = await fetch(`${BASE}/${"/".repeat(12_000)}x/`, noFollow);
     const ms = performance.now() - t0;
-    check("ATTACK: a path of 12,000 slashes is answered promptly and is not redirected", hostile.status !== 301 && ms < 1500, `${hostile.status} in ${ms.toFixed(0)} ms`);
+    // Sanity, not proof: Node caps a request line near 16 KB, where the old regex
+    // cost tens of milliseconds. The linear-time guarantee is asserted on the
+    // helper in check-hardening.mjs.
+    check("a path of 12,000 slashes is answered promptly and is not redirected", hostile.status !== 301 && ms < 1500, `${hostile.status} in ${ms.toFixed(0)} ms`);
     const mcpSlash = await fetch(`${BASE}/mcp/`, { method: "POST", headers: { "Content-Type": "application/json" }, body: "{}" });
     check("/mcp/ keeps working as before (401 without a token, not a redirect)", mcpSlash.status === 401, String(mcpSlash.status));
   }
@@ -574,7 +577,11 @@ try {
     await init.text();
     const pings = (n, base) => Array.from({ length: n }, (_, i) => ({ jsonrpc: "2.0", id: base + i, method: "ping" }));
     const big = await rpost(pings(11, 300), { "mcp-session-id": sid });
-    check("ATTACK: one batch of more messages than the budget is refused", big.status === 429, `got ${big.status}`);
+    const bigBody = await big.json().catch(() => ({}));
+    check("ATTACK: one batch of more messages than the budget is refused, and says why", big.status === 413 && /smaller batches/.test(bigBody?.error?.message ?? ""), `got ${big.status} ${JSON.stringify(bigBody).slice(0, 100)}`);
+    const within = await rpost(pings(9, 350), { "mcp-session-id": sid });
+    await within.text();
+    check("...and an oversize batch is not charged against the budget (a legitimate batch of 9 still fits after the 1-unit initialize)", within.status !== 429 && within.status !== 413, `got ${within.status}`);
   });
 
   await withServer(10, async ({ rpost }) => {

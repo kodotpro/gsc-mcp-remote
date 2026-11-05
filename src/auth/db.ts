@@ -167,11 +167,6 @@ export function openAuthDb(dbPath: string): AuthDb {
   // Concurrent writers (the per-request last_seen_at update among them) should
   // wait briefly rather than fail outright with SQLITE_BUSY.
   db.exec("PRAGMA busy_timeout = 5000;");
-  // WAL's default (FULL) fsyncs every commit; NORMAL is the standard WAL pairing
-  // and still cannot corrupt the database, only lose the last commits on power
-  // loss. Every statement here runs synchronously on the one event loop shared
-  // by all tenants, so the fsync is a latency every request pays.
-  db.exec("PRAGMA synchronous = NORMAL;");
   migrate(db);
   db.exec(SCHEMA);
   // The -wal/-shm files exist now; make sure they inherit the same privacy.
@@ -183,9 +178,33 @@ export function openAuthDb(dbPath: string): AuthDb {
  * A sample of vaulted refresh-token ciphertexts, used at boot to prove the vault
  * key still matches the data (see loadOrCreateVaultKey).
  */
-export function sampleVaultedCiphertexts(db: AuthDb, limit = 20): string[] {
+export function sampleVaultedCiphertexts(db: AuthDb, limit = 500): string[] {
   const rows = db.prepare(
     "SELECT refresh_token_enc FROM google_tokens WHERE refresh_token_enc <> '' LIMIT ?"
   ).all(limit) as { refresh_token_enc: string }[];
   return rows.map((r) => r.refresh_token_enc);
+}
+
+/**
+ * After the operator accepts a replacement key (GSC_ALLOW_NEW_VAULT_KEY=1), the
+ * rows the new key cannot open are dead weight AND a trap: left in place they
+ * would make the next start without the flag refuse to boot (none of the sampled
+ * rows decrypt) even though the key is now right. So they are erased here, with
+ * the same cascade as a revoked Google grant, and each affected user's client
+ * re-runs sign-in on its next request. Returns how many users were affected.
+ */
+export function retireUnreadableVaultRows(db: AuthDb, canDecrypt: (ciphertext: string) => boolean): number {
+  const rows = db.prepare("SELECT user_id, refresh_token_enc FROM google_tokens WHERE refresh_token_enc <> ''").all() as {
+    user_id: string;
+    refresh_token_enc: string;
+  }[];
+  let retired = 0;
+  for (const row of rows) {
+    if (canDecrypt(row.refresh_token_enc)) continue;
+    db.prepare("UPDATE google_tokens SET refresh_token_enc = '', status = 'revoked', updated_at = ? WHERE user_id = ?").run(Date.now(), row.user_id);
+    db.prepare("DELETE FROM access_tokens WHERE user_id = ?").run(row.user_id);
+    db.prepare("UPDATE refresh_tokens SET revoked = 1 WHERE user_id = ?").run(row.user_id);
+    retired++;
+  }
+  return retired;
 }

@@ -114,7 +114,7 @@ Prefer a `readonly` token for a hosted deployment. A service account is the alte
 docker compose up -d --build && curl -s http://127.0.0.1:8787/healthz
 ```
 
-**In OAuth mode, also turn on backups** (see [Backups](#backups)): set the `LITESTREAM_*` values in `.env` and start with `docker compose --profile backup up -d --build` instead. Without the profile the replication sidecar never starts, and nothing says so.
+**In OAuth mode, also turn on backups** (see [Backups](#backups)). Set the four `LITESTREAM_*` values in `.env`, then start with `docker compose --profile backup up -d --build` instead; the sidecar will not start without those values, and without the profile it never starts at all, and nothing says so. Until you have set up a bucket, the plain command above is the right one.
 
 **6. Reverse proxy.** In CloudPanel: **Sites → Add Site → Create a Reverse Proxy**, destination `http://127.0.0.1:8787`, then **Manage Site → SSL/TLS → New Let's Encrypt Certificate**. Do **not** install Caddy or another proxy alongside CloudPanel — its nginx already owns ports 80 and 443.
 
@@ -142,14 +142,16 @@ DNS-only is simplest, but if you turn the orange cloud on, three things need att
 **1. Restore the real client address.** Behind the proxy, nginx's `$remote_addr` is a Cloudflare edge address, so Express's `req.ip` becomes that edge address and every client routed through it shares one rate-limit bucket (the SDK allows 20 registrations an hour per address). Do not "fix" it by trusting two hops in the app: anyone who reaches your origin directly could then forge the address. Fix it in nginx, where the trusted ranges can be stated. Generate the lines:
 
 ```bash
-for r in $(curl -s https://www.cloudflare.com/ips-v4 https://www.cloudflare.com/ips-v6); do echo "set_real_ip_from $r;"; done
+for u in https://www.cloudflare.com/ips-v4 https://www.cloudflare.com/ips-v6; do curl -s "$u"; echo; done | grep -v '^$' | sed 's/^/set_real_ip_from /; s/$/;/'
 ```
 
-Put that output in a file under `/etc/nginx/conf.d/`, add `real_ip_header CF-Connecting-IP;` to the same file, then `nginx -t` and reload. Express keeps `trust proxy` at `1` and now sees the visitor.
+(Each list is fetched separately and a newline added after it: Cloudflare's files do not end in one, so a single `curl` over both URLs fuses the last IPv4 range onto the first IPv6 one and writes a corrupt directive.) Put that output in a file under `/etc/nginx/conf.d/`, add `real_ip_header CF-Connecting-IP;` to the same file, then `nginx -t` and reload. Express keeps `trust proxy` at `1` and now sees the visitor.
+
+Cloudflare changes these ranges occasionally. Re-run the command now and then (a monthly cron that rewrites the file and reloads nginx is enough), and keep the origin firewall in step.
 
 **2. Do not challenge the API.** A managed challenge or bot rule on `/mcp`, `/register`, `/token`, `/revoke` or `/.well-known/*` blocks non-browser MCP clients intermittently. Add a WAF custom rule that skips bot and challenge features for those paths.
 
-**3. Lock the origin.** Allow ports 80 and 443 from Cloudflare's published ranges only (your cloud firewall or `ufw`), so the origin cannot be reached around the proxy.
+**3. Lock the origin, and encrypt the last hop.** Allow ports 80 and 443 from Cloudflare's published ranges only (your cloud firewall or `ufw`), so the origin cannot be reached around the proxy. Set Cloudflare's **SSL/TLS mode to Full (strict)** with a valid certificate on the origin; in Flexible mode Cloudflare talks to your origin over plain HTTP, and an origin that redirects HTTP to HTTPS then loops.
 
 ## Turn on per-user Google sign-in
 
@@ -161,7 +163,7 @@ This is what makes the server usable by anyone with a Google account.
    https://gsc.example.com/oauth/google/callback
    ```
 3. In `.env`: `GSC_HTTP_AUTH=oauth`, `GSC_PUBLIC_URL=https://gsc.example.com`, `GSC_GOOGLE_CLIENT_ID`, `GSC_GOOGLE_CLIENT_SECRET`, and `GSC_CONTACT_EMAIL`.
-4. `docker compose --profile backup up -d --build` (without `--profile backup` there is no replication; see [Backups](#backups))
+4. `docker compose up -d --build` — or, once the `LITESTREAM_*` values are set, `docker compose --profile backup up -d --build`, because without the profile there is no replication (see [Backups](#backups))
 
 Optional extra gates: `GSC_ALLOWED_EMAILS`, `GSC_ALLOWED_EMAIL_DOMAINS`.
 
@@ -189,13 +191,19 @@ mv data/.gsc-mcp/oauth-server.db data/.gsc-mcp/oauth-server.db.old; rm -f data/.
 docker compose --profile backup run --rm --no-deps --entrypoint litestream litestream restore -config /etc/litestream.yml /data/.gsc-mcp/oauth-server.db
 ```
 
+Litestream runs as root, so the restored database is owned by root with mode `0600`, which the app (uid 1000) cannot open. Give it back:
+
+```bash
+chown 1000:1000 data/.gsc-mcp/oauth-server.db*
+```
+
 ```bash
 docker compose up -d
 ```
 
 **The vault key is deliberately not replicated.** Those refresh tokens are encrypted with the key at `data/.gsc-mcp/vault.key`; shipping it to the same bucket as the ciphertext would put the lock and the key in one place. Copy its 64 hex characters into a password manager instead. Keep it and a restore is complete.
 
-**Restore the key BEFORE you start the server.** A missing or mismatched key is never papered over: the server refuses to start when the database holds stored tokens and the key is absent, or when the key opens none of them, and says why. If the original key is truly gone, start once with `GSC_ALLOW_NEW_VAULT_KEY=1` — a new key is created, and each user reconnects once because their stored Google connection can no longer be read. (An unreadable entry met at request time is handled the same way for that one user: it is erased and their client is asked to sign in again.)
+**Restore the key BEFORE you start the server**, and give it to the container user (`chown 1000:1000 data/.gsc-mcp/vault.key && chmod 600 data/.gsc-mcp/vault.key`). A missing or mismatched key is never papered over: the server refuses to start when the database holds stored tokens and the key is absent, or when the key opens none of them, and says why. If the original key is truly gone, start once with `GSC_ALLOW_NEW_VAULT_KEY=1` — a new key is created (a corrupt key file is moved aside, not deleted), every stored Google connection that can no longer be read is erased so their clients are asked to sign in again, and **then remove the flag**: the next start needs none. (An unreadable entry met at request time is handled the same way for that one user.)
 
 ## Operating it
 
@@ -207,7 +215,7 @@ docker compose logs -f --tail 50
 git pull && docker compose --profile backup up -d --build
 ```
 
-(Use plain `docker compose up -d --build` for a bearer-mode deployment, which has no database to back up.)
+(Use plain `docker compose up -d --build` for a bearer-mode deployment, which has no database to back up, or if you have not set up backups yet.)
 
 Logs record session open/close and token refreshes, never tokens or query data. Sessions idle for 30 minutes close automatically.
 
@@ -233,7 +241,7 @@ Memory is capped at 512 MB with Node's heap at 384 MB, deliberately: Search Anal
 |---|---|---|---|
 | Concurrent sessions, server-wide | 120 | `GSC_MAX_SESSIONS` | both modes |
 | Concurrent sessions per user | 8 | `GSC_MAX_SESSIONS_PER_USER` | `oauth` only |
-| Requests per user per minute | 60 | `GSC_RATE_LIMIT_PER_MIN` | both modes; counts JSON-RPC *messages* (a batch of 100 counts 100) on every `/mcp` request, including `initialize`, GET and DELETE |
+| Requests per user per minute | 60 | `GSC_RATE_LIMIT_PER_MIN` | both modes; counts JSON-RPC *messages* (a batch of 100 counts 100) on every `/mcp` request, including `initialize`, GET and DELETE. A batch larger than the whole budget is refused with `413` rather than ever being served |
 | Rows accumulated per query | 25,000 | `GSC_MAX_TOTAL_ROWS` | both modes |
 | Stored client registrations | 10,000 | `GSC_MAX_REGISTERED_CLIENTS` | `oauth` only |
 | Deadline per Google API call | 60 s | `GSC_GOOGLE_TIMEOUT_MS` | both modes |
@@ -247,7 +255,7 @@ Two tools behave differently when the server is not on your own machine:
 - **`generate_report`** returns markdown inline instead of writing a file, because a file would land on the server's disk where you could not retrieve it. When it does write, paths are confined to `GSC_REPORT_DIR`.
 - **`image_page_audit`** refuses URLs resolving to private, loopback, link-local or reserved addresses — including the IPv4-mapped IPv6 forms that URL normalisation hides — re-validates the address at connect time so DNS cannot be rebound between check and connect, re-checks every redirect hop, and bounds each fetch with one deadline covering the body plus a byte ceiling.
 
-`submit_url`, `submit_batch` and `submit_sitemap` refuse to run in per-user mode rather than quietly acting as the server's own credential, and refuse in every mode when `GSC_SCOPES` is `readonly` (any value other than `full` or a spelling of read-only is treated as read-only, with a warning).
+`submit_url`, `submit_batch` and `submit_sitemap` refuse to run in per-user mode rather than quietly acting as the server's own credential, and refuse in every mode when `GSC_SCOPES` is `readonly`. Unset or empty means `full`; any other value that is not a spelling of read-only is also treated as read-only, with a warning that names the value.
 
 ---
 
@@ -315,7 +323,7 @@ deployment needs.
 | `GSC_ALLOWED_EMAILS` / `GSC_ALLOWED_EMAIL_DOMAINS` | No | Extra sign-in allowlist on top of Google's test-user list |
 | `GSC_OAUTH_DB_FILE` | No | SQLite path (default `~/.gsc-mcp/oauth-server.db`) |
 | `GSC_VAULT_KEY_FILE` | No | Vault key path (default `~/.gsc-mcp/vault.key`, auto-created `0600` on first run only) |
-| `GSC_ALLOW_NEW_VAULT_KEY` | Recovery only | Set to `1` for one start to accept a missing or mismatched vault key; every user then reconnects once |
+| `GSC_ALLOW_NEW_VAULT_KEY` | Recovery only | Set to `1` for one start to accept a missing, corrupt or mismatched vault key. Unreadable stored connections are erased, every affected user reconnects once, and the next start needs no flag |
 | `LITESTREAM_*` | For backups | `BUCKET`, `ENDPOINT`, `ACCESS_KEY_ID`, `SECRET_ACCESS_KEY` for the `backup` profile |
 
 ### Limits
@@ -331,8 +339,9 @@ deployment needs.
 | `GSC_MAX_CONCURRENT_FETCHES` | 3 | Outbound fetches of caller-supplied URLs, process-wide |
 | `GSC_MAX_CONCURRENT_GSC_QUERIES` | 6 | Search Analytics queries in flight, process-wide |
 | `GSC_MAX_IMAGE_BYTES` | 3145728 | Per-image ceiling for `image_page_audit` |
-| `GSC_MAX_PAGE_BYTES` | 2097152 | Per-page ceiling for `image_page_audit`; pages with absurd tag counts or nesting are refused before parsing |
-| `GSC_AUDIT_DEADLINE_MS` | 90000 | Total time one `image_page_audit` call may take across all its pages and images |
+| `GSC_MAX_PAGE_BYTES` | 2097152 | Per-page ceiling for `image_page_audit` |
+| `GSC_PARSE_TIMEOUT_MS` | 2000 | How long the HTML parser (which runs in a worker thread) may take on one page before it is abandoned |
+| `GSC_AUDIT_DEADLINE_MS` | 90000 | After this long, one `image_page_audit` call starts no further page or image fetch (a fetch already running may finish; the call can overrun by up to one fetch's own timeout) |
 | `GSC_REPORT_DIR` | cwd | The only directory `generate_report` may write into |
 
 ---
@@ -347,6 +356,8 @@ deployment needs.
 | Compose refuses to start | `GSC_HTTP_ALLOWED_HOSTS` is unset in `.env`; it is required rather than defaulted |
 | `node:sqlite` error on start | OAuth mode needs Node 24+. Bearer mode and stdio work on 18+ |
 | `access_denied` at Google | The account is not a listed test user on the consent screen |
+| The server exits at start with `No vault key at …` or `does not decrypt any of the … stored Google token(s)` | The vault key is missing or is not the one that encrypted this database (a restore without the key, a replaced volume). Restore the original `vault.key`; if it is truly gone, start once with `GSC_ALLOW_NEW_VAULT_KEY=1`, then remove the flag |
+| `429` for everyone at once, behind Cloudflare | Every client shares the proxy's address, so the per-IP limits are shared. See [Behind Cloudflare](#behind-cloudflare) |
 | Connector UI won't accept your URL | Those UIs need OAuth; a shared bearer token has no header field there. Set `GSC_HTTP_AUTH=oauth` |
 
 For the security model, the threat model, and operator notes, see

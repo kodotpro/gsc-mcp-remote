@@ -371,10 +371,17 @@ export async function startHttpServer(): Promise<HttpServer> {
     // email, token hashes and registered clients' secrets.
     process.umask(0o077);
     const db = authModules.db.openAuthDb(dbPath);
+    const allowReplacement = process.env.GSC_ALLOW_NEW_VAULT_KEY === "1";
     const vaultKey = authModules.crypto.loadOrCreateVaultKey(keyPath, {
       sampleCiphertexts: () => authModules.db.sampleVaultedCiphertexts(db),
-      allowReplacement: process.env.GSC_ALLOW_NEW_VAULT_KEY === "1",
+      allowReplacement,
     });
+    if (allowReplacement) {
+      // Make the recovery self-closing: erase what the key cannot open now, so
+      // the next start (without the flag) sees a consistent database.
+      const retired = authModules.db.retireUnreadableVaultRows(db, (c: string) => authModules.crypto.canDecrypt(vaultKey, c));
+      console.error(`[vault] GSC_ALLOW_NEW_VAULT_KEY=1: erased ${retired} stored connection(s) the key cannot open; those users will be asked to reconnect. Remove the flag before the next start.`);
+    }
     const identity = authModules.identity.googleIdentityFromEnv(publicUrl);
     const resourceUrl = `${publicUrl}/mcp`;
     const cookieSecure = publicUrl.startsWith("https:");
@@ -713,6 +720,16 @@ export async function startHttpServer(): Promise<HttpServer> {
    * the limiter ever counting one.
    */
   const refuseIfRateLimited = (req: Request, res: Response, cost: number): boolean => {
+    // A batch bigger than the whole per-minute budget can never be served, so say
+    // that plainly (and do not charge for it) instead of "retry in 60s" forever.
+    if (cost > RATE_LIMIT_PER_MIN) {
+      res.status(413).json({
+        jsonrpc: "2.0",
+        error: { code: -32000, message: `A batch of ${cost} messages exceeds the per-minute budget of ${RATE_LIMIT_PER_MIN}. Send smaller batches.` },
+        id: null,
+      });
+      return true;
+    }
     const rl = rateLimitExceeded(userIdOf(req) ?? "shared", cost);
     if (!rl.limited) return false;
     res.status(429).set("Retry-After", String(rl.retryAfter)).json({

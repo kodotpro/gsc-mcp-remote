@@ -419,7 +419,10 @@ check("google refresh token retrievable from vault", provider.getGoogleRefreshTo
   const sha256 = (v) => createHash("sha256").update(v).digest("hex");
   const hashes = db.prepare("SELECT token_hash FROM access_tokens UNION ALL SELECT token_hash FROM refresh_tokens").all().map((r) => r.token_hash);
   check("MCP tokens are stored only as SHA-256 hashes", hashes.includes(sha256(tokens2.access_token)) && hashes.includes(sha256(tokens2.refresh_token)) && !hashes.includes(tokens2.access_token) && !hashes.includes(tokens2.refresh_token));
-  const everything = JSON.stringify(["users", "google_tokens", "access_tokens", "refresh_tokens", "auth_codes", "pending_authorizations", "oauth_clients", "user_settings"].map((t) => db.prepare(`SELECT * FROM ${t}`).all()));
+  // every table, found in the database itself: a table added later cannot escape this
+  const tableNames = db.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%'").all().map((r) => r.name);
+  const everything = JSON.stringify(tableNames.map((t) => db.prepare(`SELECT * FROM ${t}`).all()));
+  check("(control) the plaintext scan covers every table the schema has", tableNames.length >= 8 && tableNames.includes("access_tokens") && tableNames.includes("google_tokens"), tableNames.join(","));
   check("no table holds a plaintext MCP token anywhere", !everything.includes(tokens2.access_token) && !everything.includes(tokens2.refresh_token));
   const enc = db.prepare("SELECT refresh_token_enc FROM google_tokens WHERE user_id = ?").get(userId).refresh_token_enc;
   check("the Google refresh token is stored only as vault ciphertext", /^v1:/.test(enc) && !everything.includes("google-rt-1"));
@@ -469,9 +472,32 @@ console.log("\nData files and the vault key fail closed");
   fs.chmodSync(kp, 0o644);
   loadOrCreateVaultKey(kp, { sampleCiphertexts: () => [ct] });
   check("a group/world-readable key file is repaired to 0600", mode(kp) === 0o600, mode(kp).toString(8));
+  // A key provided through a symlink (a Kubernetes secret volume, an /etc layout)
+  // is legitimate; what must be a regular file is the thing it points at.
   const linkPath = path.join(vdir, "link.key");
   fs.symlinkSync(kp, linkPath);
-  await expectThrow("a symlinked key file is refused", () => loadOrCreateVaultKey(linkPath), "regular file");
+  check("a symlinked key file whose target is a regular file is accepted", loadOrCreateVaultKey(linkPath, { sampleCiphertexts: () => [ct] }).equals(k1));
+  const dirLink = path.join(vdir, "dir.key");
+  fs.mkdirSync(path.join(vdir, "a-directory"));
+  fs.symlinkSync(path.join(vdir, "a-directory"), dirLink);
+  await expectThrow("a key path that resolves to a directory is refused", () => loadOrCreateVaultKey(dirLink), "regular file");
+  // A key we cannot chmod (read-only mount, another owner) must not stop boot.
+  const roKey = path.join(vdir, "ro.key");
+  fs.writeFileSync(roKey, k1.toString("hex") + "\n", { mode: 0o644 });
+  // The compiled module reads fs through live bindings to the CommonJS module, so
+  // patch that (an ESM namespace object cannot be assigned to).
+  const fsCjs = createRequire(import.meta.url)("node:fs");
+  const realChmod = fsCjs.chmodSync;
+  fsCjs.chmodSync = () => { throw Object.assign(new Error("EPERM: operation not permitted"), { code: "EPERM" }); };
+  let roLoaded;
+  try { roLoaded = loadOrCreateVaultKey(roKey, { sampleCiphertexts: () => [ct] }); } catch (e) { roLoaded = e; } finally { fsCjs.chmodSync = realChmod; }
+  check("a key file that cannot be chmod-ed warns and still loads (boot is not bricked)", Buffer.isBuffer(roLoaded) && roLoaded.equals(k1), String(roLoaded?.message ?? ""));
+  // A corrupt key under the recovery flag is moved aside and replaced; without the flag the error says so.
+  const badKey = path.join(vdir, "corrupt.key");
+  fs.writeFileSync(badKey, "deadbeef\n", { mode: 0o600 });
+  await expectThrow("a corrupt key file is refused without the flag, and the message names the flag", () => loadOrCreateVaultKey(badKey, { sampleCiphertexts: () => [] }), "GSC_ALLOW_NEW_VAULT_KEY");
+  const replaced = loadOrCreateVaultKey(badKey, { sampleCiphertexts: () => [], allowReplacement: true });
+  check("...and under the flag it is moved aside (not deleted) and a valid key created", replaced.length === 32 && fs.readdirSync(vdir).some((f) => f.startsWith("corrupt.key.invalid-")));
 
   // --- a missing key beside a populated database ---
   const kpGone = path.join(vdir, "gone.key");
@@ -512,6 +538,29 @@ console.log("\nData files and the vault key fail closed");
   check("...and the unusable ciphertext is erased rather than retained", row.status === "revoked" && row.refresh_token_enc === "");
   cdb.close();
 
+  // --- recovery is SELF-CLOSING: one flagged start, then normal starts ---
+  // The flag used to leave stale rows behind, so the NEXT start without it refused
+  // to boot ("the key opens none of the sampled rows") even though the key was right.
+  {
+    const { retireUnreadableVaultRows, sampleVaultedCiphertexts } = await import("../dist/auth/db.js");
+    const { canDecrypt } = await import("../dist/auth/crypto.js");
+    const rdb = openAuthDb(path.join(vdir, "recover.db"));
+    const rnow = Date.now();
+    for (const [i, key] of [[1, k1], [2, k1], [3, k1], [4, k2]]) {
+      rdb.prepare("INSERT INTO users (id, google_sub, email, created_at, last_seen_at) VALUES (?, ?, ?, ?, ?)").run(`r${i}`, `s${i}`, `r${i}@example.com`, rnow, rnow);
+      rdb.prepare("INSERT INTO google_tokens (user_id, refresh_token_enc, scope, status, updated_at) VALUES (?, ?, 'webmasters.readonly', 'active', ?)").run(`r${i}`, vaultEncrypt(key, `rt-${i}`), rnow);
+      rdb.prepare("INSERT INTO access_tokens (token_hash, user_id, client_id, scopes, resource, expires_at, created_at) VALUES (?, ?, 'c', 'gsc:read', NULL, ?, ?)").run(sha(`at-${i}`), `r${i}`, rnow + 3600_000, rnow);
+    }
+    // key k2 is now the key; r4 reconnected under it, r1..r3 are stale (the oldest rows, so any "first N" sample sees only them)
+    const retired = retireUnreadableVaultRows(rdb, (c) => canDecrypt(k2, c));
+    check("recovery erases exactly the connections the new key cannot open", retired === 3, `retired ${retired}`);
+    check("...and the reconnected user is untouched", rdb.prepare("SELECT status FROM google_tokens WHERE user_id = 'r4'").get().status === "active");
+    check("...their MCP tokens are revoked so the clients re-run sign-in", rdb.prepare("SELECT COUNT(*) AS n FROM access_tokens WHERE user_id IN ('r1','r2','r3')").get().n === 0 && rdb.prepare("SELECT COUNT(*) AS n FROM access_tokens WHERE user_id = 'r4'").get().n === 1);
+    const after = sampleVaultedCiphertexts(rdb);
+    check("ATTACK/incident: after recovery, the next start WITHOUT the flag accepts the key", (() => { try { return loadOrCreateVaultKey(kpGone, { sampleCiphertexts: () => after }).equals(k2); } catch { return false; } })());
+    rdb.close();
+  }
+
   // --- the real server, end to end ---
   // A populated database and NO key file: the process must exit non-zero with an
   // explanation instead of starting and reporting healthy.
@@ -538,6 +587,44 @@ console.log("\nData files and the vault key fail closed");
   check("ATTACK/incident: the real server refuses to start without the key beside a populated database", typeof bootExit === "number" && bootExit !== 0, `exit ${bootExit}`);
   check("...and says why", /permanently undecryptable/.test(bootErr), bootErr.slice(0, 200));
   check("...without having written a replacement key", !fs.existsSync(path.join(vdir, "boot-missing.key")));
+
+  // --- the documented recovery, end to end: ONE flagged start, then normal starts ---
+  const spawnServer = async (dbFile, keyFile, extra = {}) => {
+    const port = 21000 + Math.floor(Math.random() * 9000);
+    const child = spawn("node", ["dist/index.js", "http"], {
+      env: { ...process.env, GSC_HTTP_AUTH: "oauth", GSC_PUBLIC_URL: `http://127.0.0.1:${port}`, GSC_HTTP_PORT: String(port), GSC_HTTP_HOST: "127.0.0.1",
+        GSC_GOOGLE_CLIENT_ID: "dummy-client-id", GSC_GOOGLE_CLIENT_SECRET: "dummy-client-secret", GSC_OAUTH_DB_FILE: dbFile, GSC_VAULT_KEY_FILE: keyFile, HOME: vdir, ...extra },
+      stdio: ["ignore", "ignore", "pipe"],
+    });
+    let err = "";
+    child.stderr.on("data", (c) => (err += c.toString()));
+    let up = false;
+    for (let i = 0; i < 40 && !up && child.exitCode === null; i++) {
+      up = await fetch(`http://127.0.0.1:${port}/healthz`).then((r) => r.ok).catch(() => false);
+      if (!up) await new Promise((r) => setTimeout(r, 250));
+    }
+    const stop = () => new Promise((resolve) => { if (child.exitCode !== null) return resolve(); child.once("exit", resolve); child.kill("SIGTERM"); setTimeout(() => child.kill("SIGKILL"), 3000).unref(); });
+    return { up, err: () => err, stop, exitCode: () => child.exitCode };
+  };
+  const recDb = path.join(vdir, "recovery-e2e.db");
+  const rk = openAuthDb(recDb);
+  for (const i of [1, 2]) {
+    rk.prepare("INSERT INTO users (id, google_sub, email, created_at, last_seen_at) VALUES (?, ?, ?, ?, ?)").run(`e${i}`, `es${i}`, `e${i}@example.com`, now, now);
+    rk.prepare("INSERT INTO google_tokens (user_id, refresh_token_enc, scope, status, updated_at) VALUES (?, ?, 'webmasters.readonly', 'active', ?)").run(`e${i}`, vaultEncrypt(k1, `rt-e${i}`), now);
+  }
+  rk.close();
+  const recKey = path.join(vdir, "recovery-e2e.key"); // the original key is gone
+  const flagged = await spawnServer(recDb, recKey, { GSC_ALLOW_NEW_VAULT_KEY: "1" });
+  check("with GSC_ALLOW_NEW_VAULT_KEY=1 the server starts despite the missing key", flagged.up, flagged.err().slice(0, 200));
+  check("...and says what it erased", /erased 2 stored connection/.test(flagged.err()), flagged.err().slice(0, 200));
+  await flagged.stop();
+  const chk = openAuthDb(recDb);
+  const left = chk.prepare("SELECT COUNT(*) AS n FROM google_tokens WHERE refresh_token_enc <> ''").get().n;
+  chk.close();
+  check("the unreadable connections are gone from the database", left === 0, `${left} still stored`);
+  const normal = await spawnServer(recDb, recKey); // no flag
+  check("ATTACK/incident: the NEXT start, without the flag, boots (recovery closed itself)", normal.up, normal.err().slice(0, 240));
+  await normal.stop();
 }
 
 // ---------------------------------------------------------------------------
@@ -560,6 +647,13 @@ console.log("\nThe authenticated hot path does not write on every request");
   hdb.prepare("UPDATE users SET last_seen_at = 7 WHERE id = 'uH'").run();
   for (let i = 0; i < 25; i++) await hp.verifyAccessToken("hot-at");
   check("25 more requests within the interval write nothing", seen() === 7, `last_seen_at became ${seen()}`);
+  // ...but the stamp must still advance once the interval has passed, or "last
+  // seen" would freeze after the first request (a mutation the test above allows).
+  process.env.GSC_LAST_SEEN_INTERVAL_MS = "40";
+  await new Promise((r) => setTimeout(r, 90));
+  await hp.verifyAccessToken("hot-at");
+  check("after the interval the next request writes again", seen() > 7, `last_seen_at is ${seen()}`);
+  delete process.env.GSC_LAST_SEEN_INTERVAL_MS;
   hdb.close();
 }
 
@@ -669,6 +763,7 @@ try {
   const cbKnown = await (await fetch(`${BASE}/oauth/google/callback?error=access_denied`)).text();
   check("a documented Google error code is still shown to the person", cbKnown.includes("access_denied"));
   await new Promise((r) => setTimeout(r, 300));
+  check("(control) the callback failures ARE logged, so the absence below means something", /google callback failed/.test(stderr));
   check("ATTACK: ...and it is not written to the log either", !stderr.includes("FORGED-LOG-LINE"));
 
   const asMeta = await (await fetch(`${BASE}/.well-known/oauth-authorization-server`)).json();

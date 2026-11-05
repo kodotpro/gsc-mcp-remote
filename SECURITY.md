@@ -106,20 +106,30 @@ failure rather than a surprise:
   link-local, CGNAT, reserved, IPv4-mapped/compatible/translated or NAT64
   addresses; the address is re-validated at connect time, and every redirect hop
   re-checked
-- Fetches are bounded in both time and bytes; image dimensions are read by a
+- Fetches are bounded in both time and bytes. The HTML parser runs in a worker
+  thread under a hard timeout, so a hostile page cannot stall the event loop all
+  tenants share; exifr only ever sees a rebuilt PNG holding the few chunks it
+  needs (it inflates a colour profile without limit); image dimensions are read by a
   first-party parser with no unbounded loops, dispatched on the format the
   file's own magic bytes declare rather than a server-supplied Content-Type
 - Per-user mode requests `webmasters.readonly` for Search Console data, plus
   `openid` and `email` solely to identify the account; the write tools
   (`submit_url`, `submit_batch`, `submit_sitemap`) refuse to run in it, and
-  `GSC_SCOPES` fails closed: any value other than `full` is read-only
+  `GSC_SCOPES` fails closed: unset or empty means `full`, and any other value
+  that is not a spelling of read-only is read-only too, with a warning
 - The per-user request budget counts JSON-RPC messages and applies to every
   `/mcp` request, so a batch, a session-churn loop or a probe against unknown
   sessions cannot sidestep it
 - Every tool declares MCP annotations (`readOnlyHint`, `destructiveHint`,
-  `openWorldHint`); `disconnect_account` takes a server-issued single-use token
-  and `set_default_property` accepts only a property the account really has;
-  third-party text in results is marked untrusted and bounded
+  `openWorldHint`), which is what lets a client put its own approval prompt in
+  front of a destructive call. `disconnect_account` takes a server-issued
+  single-use token across two calls; that forces a second, separate call but is
+  **not** an approval by the person (the token is returned to the same model), so
+  the client's prompt for destructive tools is the real gate. `set_default_property`
+  accepts only a property the account really has. Results from the data tools carry
+  an `untrusted_text` notice, and the two tools that surface raw page attributes
+  and search prompts (`image_page_audit`, `genai_conversation_queries`) cap and
+  flatten that text (invisible and bidi characters included)
 
 ## Notes for operators
 

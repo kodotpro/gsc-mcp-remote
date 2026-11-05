@@ -36,7 +36,8 @@ const REFRESH_TTL_MS = 30 * 24 * 60 * 60 * 1000; // 30 days
 const CODE_TTL_MS = 60 * 1000;                   // 1 minute
 const PENDING_TTL_MS = 10 * 60 * 1000;           // consent-screen dwell time
 const CLIENT_TTL_MS = 7 * 24 * 60 * 60 * 1000;   // unused registrations are swept
-const LAST_SEEN_WRITE_INTERVAL_MS = 60 * 1000;   // verifyAccessToken's activity stamp
+/** verifyAccessToken's activity stamp; read per call so a test can shorten it. */
+const lastSeenWriteIntervalMs = (): number => Number(process.env.GSC_LAST_SEEN_INTERVAL_MS ?? 60 * 1000);
 /** Upper bound on stored registrations; see makeRoomForRegistration. */
 const DEFAULT_MAX_REGISTERED_CLIENTS = 10_000;
 
@@ -448,7 +449,7 @@ export class GscOAuthProvider implements OAuthServerProvider {
   }
 
   /**
-   * Records that the user was seen, at most once per LAST_SEEN_WRITE_INTERVAL_MS.
+   * Records that the user was seen, at most once a minute (GSC_LAST_SEEN_INTERVAL_MS).
    *
    * This used to be an unconditional UPDATE on every authenticated request. The
    * database is synchronous and shared by every tenant on one event loop, so
@@ -460,7 +461,7 @@ export class GscOAuthProvider implements OAuthServerProvider {
   private touchLastSeen(userId: string): void {
     const now = Date.now();
     const last = this.lastSeenWritten.get(userId);
-    if (last !== undefined && now - last < LAST_SEEN_WRITE_INTERVAL_MS) return;
+    if (last !== undefined && now - last < lastSeenWriteIntervalMs()) return;
     this.lastSeenWritten.set(userId, now);
     this.db.prepare("UPDATE users SET last_seen_at = ? WHERE id = ?").run(now, userId);
   }

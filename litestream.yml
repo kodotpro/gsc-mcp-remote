@@ -19,8 +19,10 @@
 # ciphertext would put the lock and its key in one place and defeat the
 # encryption entirely. Back the key up out of band: it is 64 hex characters,
 # so a password manager is the right home for it. Keep it, and a restored
-# database works. Lose it, and the restore still works — the stored Google
-# connections are simply dead and each user reconnects once.
+# database works. Lose it, and the server REFUSES TO START rather than quietly
+# minting a new key: start once with GSC_ALLOW_NEW_VAULT_KEY=1 and every user
+# reconnects once (the stored connections can no longer be read), then remove
+# the flag. See docs/self-hosting.md, "Backups".
 # ---------------------------------------------------------------------------
 #
 # Env vars are expanded by Litestream, and come from .env:

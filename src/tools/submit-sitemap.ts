@@ -1,6 +1,6 @@
 import { getSearchConsoleClient, resolveSiteUrl } from "../auth.js";
 import { getUserContext } from "../request-context.js";
-import { getScopeTier } from "../oauth.js";
+import { getScopeTier, readOnlyExplanation } from "../oauth.js";
 
 interface SitemapSubmitResult {
   siteUrl: string;
@@ -81,9 +81,7 @@ export async function submitSitemap(sitemapUrl?: string, siteUrlOverride?: strin
       siteUrl: "",
       sitemapUrl: sitemapUrl || "",
       success: false,
-      error:
-        "Sitemap submission needs full access, but this install is in read only mode (GSC_SCOPES=readonly). " +
-        "Re-run `node dist/index.js setup --reauth` and choose full access, then try again.",
+      error: `Sitemap submission needs full access, but ${readOnlyExplanation()}`,
     };
   }
 

@@ -159,12 +159,12 @@ function tiff(b: Buffer): Dimensions | null {
 }
 
 /** How much of an SVG is examined: the root tag sits in the first few KB. */
-const SVG_HEAD_BYTES = 8192;
+const SVG_HEAD_BYTES = 16384;
 
 /**
  * SVG: width/height attributes if they carry usable units, else the viewBox.
  *
- * Only the opening tag is examined, and only the first 8 KB, so a huge or
+ * Only the opening tag is examined, and only the first 16 KB, so a huge or
  * hostile document cannot turn this into real work. Every search here is
  * linear: the root tag is located with ONE scan and its end with ONE indexOf.
  * The previous `/<svg\b[^>]*>/` restarted its "[^>]*" run from every "<svg" in
@@ -179,7 +179,9 @@ function svg(b: Buffer): Dimensions | null {
   const open = head.slice(start, end < 0 ? head.length : end + 1);
 
   const attr = (name: string): number | undefined => {
-    const m = open.match(new RegExp(`\\b${name}\\s*=\\s*["']?([0-9.]+)`, "i"));
+    // Not "data-width", and only a bare number or px: "100%" and "10em" describe
+    // layout, not intrinsic size, so they fall through to the viewBox.
+    const m = open.match(new RegExp(`(?<![\\w:-])${name}\\s*=\\s*["']?([0-9.]+)(?:px)?(?=["'\\s/>])`, "i"));
     if (!m) return undefined;
     const n = Number.parseFloat(m[1]);
     return Number.isFinite(n) ? n : undefined;

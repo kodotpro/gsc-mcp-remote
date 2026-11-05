@@ -190,6 +190,7 @@ try {
   for (const name of ["submit_url", "submit_batch"]) {
     if (annotationOf(name).destructiveHint !== true) problems.push(`${name} can ask Google to drop a page (URL_DELETED) but is not marked destructiveHint`);
   }
+  if (annotationOf("set_default_property").openWorldHint !== true) problems.push("set_default_property asks Google whether the account has the property but is marked closed-world");
   if (annotationOf("image_page_audit").openWorldHint !== true) problems.push("image_page_audit fetches arbitrary hosts but is not marked openWorldHint");
   if (annotationOf("quick_wins").readOnlyHint !== true) problems.push("quick_wins only reads but is not marked readOnlyHint");
 

@@ -111,7 +111,8 @@ function annotationsFor(name: string): ToolAnnotations {
     case "export_my_data":
       return { readOnlyHint: true, idempotentHint: true, openWorldHint: false };
     case "set_default_property":
-      return { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false };
+      // It asks Google (sites.list) whether the account really has the property.
+      return { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: true };
     case "disconnect_account":
       return { readOnlyHint: false, destructiveHint: true, idempotentHint: true, openWorldHint: false };
     case "submit_url":

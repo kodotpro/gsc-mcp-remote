@@ -26,7 +26,7 @@ export { SERVER_VERSION };
 export const PRODUCT_NAME = "Google Search Console MCP Server - by k-o.pro (remote)";
 
 /** Bump when page content changes. Feeds dateModified and the sitemap's lastmod. */
-export const SITE_UPDATED = "2026-10-13";
+export const SITE_UPDATED = "2026-11-05";
 
 /** "13 October 2026", for prose. */
 export function humanDate(iso: string): string {
@@ -490,8 +490,9 @@ export const TOOL_GROUPS: ToolGroup[] = [
         what: "Erase all of it and end your sessions",
         ask: "Disconnect my account and erase what you store.",
         detailHtml: "Erases the stored Google connection, every token and your saved settings, " +
-          "and ends your open sessions. It asks before it acts: the first call explains what will " +
-          "be erased and returns a one-time code, and a second call with that code does it.",
+          "and ends your open sessions. It takes two calls: the first explains what will be erased " +
+          "and returns a one-time code, and a second call with that code does it. Your client's own " +
+          "approval prompt for destructive tools is what puts you in the loop.",
         params: [],
       },
     ],
@@ -781,7 +782,7 @@ export const COMPARISON: [string, string][] = [
   ["One property per config, or all of them?",
     "Every property your Google account can see, from one connection."],
   ["What can it change in your Google account?",
-    "Nothing, on the hosted instance: it requests <code>webmasters.readonly</code> only."],
+    "Nothing, on the hosted instance: its only Search Console permission is <code>webmasters.readonly</code>, which is read-only. Signing in also uses Google's basic <code>openid</code> and <code>email</code> scopes, only to identify you."],
   ["Is your Search Console data stored?",
     "No. It is fetched live for each question and passed back to your client."],
   ["What do the tools return?",
