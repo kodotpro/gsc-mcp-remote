@@ -34,7 +34,7 @@ Pick an auth mode first:
 | What they see | **Their** properties; Google's permissions apply per person | Everything the server's single credential sees |
 | claude.ai / Desktop connector UI | **Yes** — add by URL, OAuth is discovered | No (those UIs have no header field) |
 | Claude Code | Yes, walks the OAuth flow | Yes, with `--header "Authorization: Bearer …"` |
-| Runtime | Node 24+ | Node 18+ |
+| Runtime | Node 24+ | Node 20+ |
 
 Bearer is the default so an existing deployment keeps working across an upgrade. OAuth mode is switched on explicitly, and forces the read-only Google scope.
 
@@ -354,7 +354,7 @@ deployment needs.
 | `502` from the proxy | The proxy cannot reach the container. Check `docker compose ps` and `docker compose logs` |
 | `525` behind Cloudflare | Cloudflare cannot complete TLS to your origin — usually a missing or lapsed origin certificate for that hostname |
 | Compose refuses to start | `GSC_HTTP_ALLOWED_HOSTS` is unset in `.env`; it is required rather than defaulted |
-| `node:sqlite` error on start | OAuth mode needs Node 24+. Bearer mode and stdio work on 18+ |
+| `node:sqlite` error on start | OAuth mode needs Node 24+. Bearer mode and stdio work on 20+ |
 | `access_denied` at Google | The account is not a listed test user on the consent screen |
 | The server exits at start with `No vault key at …` or `does not decrypt any of the … stored Google token(s)` | The vault key is missing or is not the one that encrypted this database (a restore without the key, a replaced volume). Restore the original `vault.key`; if it is truly gone, start once with `GSC_ALLOW_NEW_VAULT_KEY=1`, then remove the flag |
 | `429` for everyone at once, behind Cloudflare | Every client shares the proxy's address, so the per-IP limits are shared. See [Behind Cloudflare](#behind-cloudflare) |

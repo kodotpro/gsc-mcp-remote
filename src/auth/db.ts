@@ -3,7 +3,7 @@
  * dependencies, one file on the data volume, WAL mode for concurrent reads.
  *
  * Only the OAuth server path imports this module, so stdio mode keeps working
- * on Node 18 even though node:sqlite needs a newer runtime. The HTTP entry
+ * on Node 20 even though node:sqlite needs a newer runtime. The HTTP entry
  * translates a missing builtin into a clear "OAuth mode needs Node 24+" error.
  */
 import { DatabaseSync } from "node:sqlite";

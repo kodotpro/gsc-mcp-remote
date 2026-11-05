@@ -32,7 +32,7 @@ body:
     id: node
     attributes:
       label: Node version
-      description: "`node --version`. OAuth mode needs 24+; other modes 18+"
+      description: "`node --version`. OAuth mode needs 24+; other modes 20+"
     validations:
       required: true
   - type: textarea

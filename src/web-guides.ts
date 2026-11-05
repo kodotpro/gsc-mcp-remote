@@ -498,7 +498,7 @@ function selfHostPage(info: SiteInfo): string {
         <td>Your server, encrypted at rest</td></tr>
     <tr><td>Indexing tools</td><td>Yes, with <code>GSC_SCOPES=full</code></td>
         <td>Not in per-user sign-in mode, which is read-only</td></tr>
-    <tr><td>Runtime</td><td>Node 18+</td><td>Node 18+; per-user sign-in needs Node 24+</td></tr>
+    <tr><td>Runtime</td><td>Node 20+</td><td>Node 20+; per-user sign-in needs Node 24+</td></tr>
   </table>
 
   <h2>Run it on your machine</h2>
@@ -533,7 +533,7 @@ npm ci && npm run build</code></pre></li>
     <tr><td>What they see</td><td>Their own properties</td><td>Everything the server's single credential sees</td></tr>
     <tr><td>claude.ai and Desktop connector UI</td><td>Yes, added by URL</td><td>No</td></tr>
     <tr><td>Claude Code</td><td>Yes, through the OAuth flow</td><td>Yes, with an <code>Authorization</code> header</td></tr>
-    <tr><td>Runtime</td><td>Node 24+</td><td>Node 18+</td></tr>
+    <tr><td>Runtime</td><td>Node 24+</td><td>Node 20+</td></tr>
   </table>
   <p>The <a href="${esc(SELF_HOSTING_DOC_URL)}" rel="noopener">self-hosting
      documentation</a> covers the rest: Docker deployment, the reverse proxy, turning

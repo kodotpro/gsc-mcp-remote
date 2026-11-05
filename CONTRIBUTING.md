@@ -13,7 +13,7 @@ For anything security-related, do not open a public issue: see
 
 ## Getting set up
 
-Node 18+ builds and runs everything except per-user OAuth mode, which needs
+Node 20+ builds and runs everything except per-user OAuth mode, which needs
 Node 24+ for `node:sqlite`.
 
 ```bash
@@ -38,7 +38,7 @@ npm run typecheck
 npm run typecheck && npm run build && npm test
 ```
 
-All four suites must pass. CI runs the same ones across Node 18, 20, 22 and 24,
+All four suites must pass. CI runs the same ones across Node 20, 22 and 24,
 plus a dependency-advisory gate.
 
 A few things reviewers will look for:

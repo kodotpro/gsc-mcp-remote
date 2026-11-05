@@ -4,7 +4,7 @@
 
 [![build](https://github.com/kodotpro/gsc-mcp-remote/actions/workflows/build.yml/badge.svg)](https://github.com/kodotpro/gsc-mcp-remote/actions/workflows/build.yml)
 [![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
-[![Node](https://img.shields.io/badge/node-%E2%89%A518-brightgreen.svg)](#run-it-on-your-own-machine)
+[![Node](https://img.shields.io/badge/node-%E2%89%A520-brightgreen.svg)](#run-it-on-your-own-machine)
 [![MCP](https://img.shields.io/badge/MCP-Streamable%20HTTP%20%2B%20stdio-orange.svg)](https://modelcontextprotocol.io)
 [![PRs welcome](https://img.shields.io/badge/PRs-welcome-brightgreen.svg)](CONTRIBUTING.md)
 
@@ -266,7 +266,7 @@ Add the service account's email as a user on each property in Search Console, th
 
 </details>
 
-**Requirements:** Node 18+. **Access level:** `GSC_SCOPES=readonly` (recommended) requests a single read-only Google permission; `full` adds the write tools.
+**Requirements:** Node 20+. **Access level:** `GSC_SCOPES=readonly` (recommended) requests a single read-only Google permission; `full` adds the write tools.
 
 ### Or host it for other people
 
@@ -312,7 +312,7 @@ This server holds other people's Google credentials, so the design is worth stat
 
 ### Self-checks
 
-Four suites run with no Google credentials, so they are safe to run anywhere, and CI runs them on every push across Node 18, 20, 22 and 24:
+Four suites run with no Google credentials, so they are safe to run anywhere, and CI runs them on every push across Node 20, 22 and 24:
 
 ```bash
 npm test
