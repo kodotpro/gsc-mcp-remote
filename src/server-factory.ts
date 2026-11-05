@@ -824,7 +824,7 @@ function registerTools(server: McpServer): void {
     {
       days: z.number().default(480).describe("Days to analyse (default 480, the full 16 months GSC retains)"),
       min_impressions: z.number().default(1).describe("Minimum impressions for a query to be listed (single-impression rows are evidence, not noise, so the default keeps them)"),
-      max_rows_per_bucket: z.number().default(50).describe("Maximum rows returned per bucket; totals always cover everything"),
+      max_rows_per_bucket: z.number().int().min(1).max(500).default(50).describe("Maximum rows returned per bucket; totals always cover everything"),
       include_timeline: z.boolean().default(true).describe("Include the monthly artefact timeline (one extra API call)"),
       site_url: z.string().optional().describe("Override the configured property (e.g. sc-domain:example.com)"),
     },
@@ -848,7 +848,7 @@ function registerTools(server: McpServer): void {
       // round trip holding an outbound-fetch permit. The HTML checks still cover
       // every image on the page regardless of how many are fetched.
       max_images_per_page: z.number().int().min(1).max(50).default(12).describe("Maximum images fetched and weighed per page, 1-50 (HTML checks still cover all images)"),
-      max_images_reported: z.number().default(20).describe("Maximum per-image rows returned per page"),
+      max_images_reported: z.number().int().min(1).max(100).default(20).describe("Maximum per-image rows returned per page"),
     },
     async ({ urls, fetch_metadata, max_images_per_page, max_images_reported }) => {
       const results = await imagePageAudit(urls, fetch_metadata, max_images_per_page, max_images_reported);

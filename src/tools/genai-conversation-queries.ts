@@ -1,3 +1,4 @@
+import { boundedText } from "../guardrails.js";
 import { fetchAllRows, getDateRange } from "../analytics.js";
 
 /**
@@ -196,9 +197,10 @@ export async function genaiConversationQueries(
     const topPages = [...agg.pages.entries()]
       .sort((a, b) => b[1] - a[1])
       .slice(0, 3)
-      .map(([page, impressions]) => ({ page, impressions }));
+      .map(([page, impressions]) => ({ page: boundedText(page, 300), impressions }));
     buckets[bucket].push({
-      query,
+      // Whole pasted agent prompts land here by design; bound what reaches the model.
+      query: boundedText(query, 400),
       impressions: agg.impressions,
       clicks: agg.clicks,
       ctr: agg.impressions ? Math.round((agg.clicks / agg.impressions) * 10000) / 100 : 0,
@@ -263,7 +265,7 @@ export async function genaiConversationQueries(
         {
           meaning: BUCKET_MEANING[b],
           total_matched: buckets[b].length,
-          rows: buckets[b].slice(0, maxRowsPerBucket),
+          rows: buckets[b].slice(0, Math.max(1, Math.min(500, Math.floor(maxRowsPerBucket) || 50))),
         },
       ])
     ),

@@ -2,6 +2,7 @@ import { parse, type HTMLElement } from "node-html-parser";
 import { imageDimensions, MEASURABLE_FORMATS } from "../image-dimensions.js";
 import exifr from "exifr";
 import { isRemoteMode } from "../runtime.js";
+import { boundedText } from "../guardrails.js";
 import { safeFetch, BlockedUrlError } from "../net-guard.js";
 
 /**
@@ -400,6 +401,9 @@ export async function imagePageAudit(
   // Clamp here too, not only in the tool schema: this function is exported and
   // composed from elsewhere, and the number multiplies in-flight fetches.
   maxImagesPerPage = Math.max(1, Math.min(50, Math.floor(maxImagesPerPage) || 12));
+  // A negative count slices from the END of the findings, and an unbounded one
+  // multiplies the response; bound it here as well as in the schema.
+  maxImagesReported = Math.max(1, Math.min(100, Math.floor(maxImagesReported) || 20));
   const audits: PageAudit[] = [];
 
   for (const rawUrl of urls.slice(0, 5)) {
@@ -629,5 +633,30 @@ export async function imagePageAudit(
       "empty alt (alt=\"\") is correct for decorative images; it is reported but not counted as an issue.",
   };
 
+  boundThirdPartyText(audits);
   return { audits, overall };
+}
+
+/**
+ * Everything below is text the page's author (or the page's server) chose, and
+ * it goes into the model's context unchanged. Cap and flatten it. Classification
+ * (generic alt, filename-as-alt, duplicates) has already run on the full values.
+ */
+function boundThirdPartyText(audits: PageAudit[]): void {
+  for (const a of audits) {
+    if (a.error) a.error = boundedText(a.error, 300);
+    if (a.page_checks) {
+      if (a.page_checks.lcp_candidate_src) a.page_checks.lcp_candidate_src = boundedText(a.page_checks.lcp_candidate_src, 500);
+      if (a.page_checks.lcp_candidate_fetchpriority) a.page_checks.lcp_candidate_fetchpriority = boundedText(a.page_checks.lcp_candidate_fetchpriority, 24);
+      a.page_checks.max_image_preview = boundedText(a.page_checks.max_image_preview, 24);
+    }
+    for (const img of a.images ?? []) {
+      img.src = boundedText(img.src, 500);
+      if (img.alt !== null) img.alt = boundedText(img.alt, 300);
+      if (img.loading) img.loading = boundedText(img.loading, 24);
+      if (img.fetchpriority) img.fetchpriority = boundedText(img.fetchpriority, 24);
+      if (img.format) img.format = boundedText(img.format, 64);
+      if (img.metadata?.digital_source_type) img.metadata.digital_source_type = boundedText(img.metadata.digital_source_type, 120);
+    }
+  }
 }
