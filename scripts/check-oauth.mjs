@@ -646,6 +646,21 @@ try {
     check(`the server created ${f} private (no group/other access)`, fs.existsSync(full) && (fs.statSync(full).mode & 0o077) === 0, fs.existsSync(full) ? (fs.statSync(full).mode & 0o777).toString(8) : "missing");
   }
 
+  // The callback is an unauthenticated GET and its `error` query value used to
+  // be copied into the log line and onto this origin's own error page.
+  const inj = "x%0A%5Bsession%5D%20opened%20FORGED-LOG-LINE%3Cb%3E";
+  const cbForged = await fetch(`${BASE}/oauth/google/callback?error=${inj}`);
+  const cbForgedBody = await cbForged.text();
+  check(
+    "ATTACK: attacker text in the callback 'error' parameter is not reflected on the error page",
+    cbForged.status === 400 && !cbForgedBody.includes("FORGED-LOG-LINE") && cbForgedBody.includes("unrecognised error"),
+    `status ${cbForged.status}`
+  );
+  const cbKnown = await (await fetch(`${BASE}/oauth/google/callback?error=access_denied`)).text();
+  check("a documented Google error code is still shown to the person", cbKnown.includes("access_denied"));
+  await new Promise((r) => setTimeout(r, 300));
+  check("ATTACK: ...and it is not written to the log either", !stderr.includes("FORGED-LOG-LINE"));
+
   const asMeta = await (await fetch(`${BASE}/.well-known/oauth-authorization-server`)).json();
   const norm = (u) => String(u ?? "").replace(/\/+$/, "");
   check("AS metadata served", norm(asMeta.issuer) === BASE && Boolean(asMeta.authorization_endpoint && asMeta.token_endpoint), `issuer ${asMeta.issuer}`);

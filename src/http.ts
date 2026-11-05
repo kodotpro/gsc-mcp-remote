@@ -50,6 +50,7 @@ import { type SiteInfo } from "./web-pages.js";
 import { PUBLIC_PAGES, llmsTxt, sitemapXml } from "./web-guides.js";
 import { FONT_ROUTES, IMAGE_ROUTES, canonicalBase } from "./web-theme.js";
 import { currentStars, startStarPolling } from "./github-stars.js";
+import { trimTrailingSlashes } from "./path-utils.js";
 
 type HttpAuthMode = "bearer" | "oauth";
 
@@ -185,6 +186,27 @@ function sharedTokenMiddleware(expected: string): RequestHandler {
 }
 
 // ---------------------------------------------------------------------------
+
+/** The error codes Google's and RFC 6749's authorization endpoints can return. */
+const GOOGLE_AUTH_ERRORS = new Set([
+  "access_denied", "invalid_request", "unauthorized_client", "unsupported_response_type",
+  "invalid_scope", "server_error", "temporarily_unavailable", "interaction_required",
+  "login_required", "consent_required", "account_selection_required", "invalid_client",
+  "redirect_uri_mismatch", "admin_policy_enforced", "disabled_client", "org_internal",
+]);
+
+/** A caller-supplied `error` value, reduced to a known code or a fixed label. */
+export function safeGoogleError(raw: string): string {
+  return GOOGLE_AUTH_ERRORS.has(raw) ? raw : "unrecognised error";
+}
+
+/**
+ * Makes text safe for ONE log record: control characters (CR/LF forge extra
+ * records) become spaces and the length is bounded.
+ */
+export function logSafe(text: string): string {
+  return text.replace(/[\u0000-\u001f\u007f-\u009f\u2028\u2029]+/g, " ").slice(0, 300);
+}
 
 /** Fully-escaped error page; browser-facing OAuth routes render through this. */
 function errorPage(heading: string, detail: string): string {
@@ -487,9 +509,17 @@ export async function startHttpServer(): Promise<HttpServer> {
    * Scoped to the registered pages: /mcp/ must keep working as it is.
    */
   const pagePaths = new Set(PUBLIC_PAGES.map((p) => p.path));
+  // A path longer than the longest page plus a few stray slashes cannot be the
+  // slash variant of a page, so it never reaches the trimming at all.
+  const maxPagePathLength = Math.max(...PUBLIC_PAGES.map((p) => p.path.length)) + 16;
   app.use((req: Request, res: Response, next) => {
-    if ((req.method === "GET" || req.method === "HEAD") && req.path.length > 1 && req.path.endsWith("/")) {
-      const bare = req.path.replace(/\/+$/, "");
+    if (
+      (req.method === "GET" || req.method === "HEAD") &&
+      req.path.length > 1 &&
+      req.path.length <= maxPagePathLength &&
+      req.path.endsWith("/")
+    ) {
+      const bare = trimTrailingSlashes(req.path);
       if (pagePaths.has(bare)) {
         const query = req.originalUrl.slice(req.path.length);
         res.redirect(301, bare + query);
@@ -602,7 +632,11 @@ export async function startHttpServer(): Promise<HttpServer> {
       const code = typeof req.query.code === "string" ? req.query.code : "";
       const googleError = typeof req.query.error === "string" ? req.query.error : "";
       try {
-        if (googleError) throw new Error(`Google sign-in was not completed (${googleError}).`);
+        // Only Google's documented error codes are echoed. The value arrives on
+        // an unauthenticated GET, so anything else (it can carry newlines that
+        // forge log lines, or arbitrary text shown on this origin's own error
+        // page) is replaced by a fixed label.
+        if (googleError) throw new Error(`Google sign-in was not completed (${safeGoogleError(googleError)}).`);
         if (!state || !code) throw new Error("Missing state or code in Google's callback.");
         const browserToken = readCookie(req.headers.cookie, AUTH_COOKIE);
         const redirectTo = await provider.completeGoogleSignIn(state, code, browserToken);
@@ -611,7 +645,7 @@ export async function startHttpServer(): Promise<HttpServer> {
         res.redirect(redirectTo);
       } catch (err: unknown) {
         const message = err instanceof Error ? err.message : String(err);
-        console.error("[oauth] google callback failed:", message);
+        console.error("[oauth] google callback failed:", logSafe(message));
         res.setHeader("Set-Cookie", clearAuthCookieHeader(cookieSecure));
         res.status(400).type("html").send(errorPage("Sign-in didn't complete", message));
       }

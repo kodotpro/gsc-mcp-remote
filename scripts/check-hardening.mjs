@@ -17,6 +17,8 @@ import { confineReportPath } from "../dist/tools/generate-report.js";
 import { sniffImageFormat, dimensionsAreSafeFor, mediaTypeFor } from "../dist/tools/image-page-audit.js";
 import { imageDimensions } from "../dist/image-dimensions.js";
 import { createLimiter, outboundFetchLimiter, googleFetchLimiter } from "../dist/concurrency.js";
+import { trimTrailingSlashes } from "../dist/path-utils.js";
+import { safeGoogleError, logSafe } from "../dist/http.js";
 
 const failures = [];
 const check = (label, ok, detail = "") => {
@@ -365,6 +367,33 @@ check(
   bufferProbe["/large"].size === 2_500_000 && bufferProbe["/large"].retained <= 3 * 1024 * 1024,
   JSON.stringify(bufferProbe["/large"])
 );
+
+// ---------------------------------------------------------------------------
+console.log("\nUnauthenticated input handling");
+// ---------------------------------------------------------------------------
+// The trailing-slash middleware ran /\/+$/ on the raw request path of every
+// unauthenticated GET. That regex is quadratic on a run of slashes that does
+// not end the string, so one request line near the header limit could hold the
+// event loop all tenants share. The assertion is on the work, with an input a
+// quadratic implementation cannot finish in time (200,000 slashes is ~2e10
+// steps), not on how the result is computed.
+{
+  const hostile = "/".repeat(200_000) + "x/";
+  const t0 = performance.now();
+  const trimmed = trimTrailingSlashes(hostile);
+  const ms = performance.now() - t0;
+  check("ATTACK: a 200,000-slash path is trimmed in linear time", trimmed === "/".repeat(200_000) + "x" && ms < 100, `${ms.toFixed(1)} ms`);
+  check("trailing slashes are removed", trimTrailingSlashes("/claude///") === "/claude");
+  check("a path with none is returned unchanged", trimTrailingSlashes("/claude") === "/claude");
+  check("only slashes collapse to empty", trimTrailingSlashes("////") === "");
+  check("interior slashes are kept", trimTrailingSlashes("/a//b/") === "/a//b");
+}
+// The OAuth callback echoed an unauthenticated `error` query value into an
+// Error message that was then written to the log and rendered on the error page.
+check("a documented Google error code is kept", safeGoogleError("access_denied") === "access_denied");
+check("ATTACK: anything else becomes a fixed label", safeGoogleError("x\n[session] opened FORGED") === "unrecognised error");
+check("ATTACK: log text cannot forge a second record", !/[\r\n]/.test(logSafe("one\r\ntwo\nthree\u2028four")));
+check("log text is bounded", logSafe("a".repeat(5000)).length === 300);
 
 if (failures.length > 0) {
   console.error(`\nHardening tests: ${failures.length} failure(s).`);
