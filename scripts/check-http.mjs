@@ -233,7 +233,7 @@ try {
   // Google's verification for a sensitive scope requires this statement on the
   // privacy page, and docs/verification/scope-justifications.md says it is there.
   check("the policy carries the Google API Services User Data Policy / Limited Use statement", /Google API Services User Data Policy/i.test(privacyBody) && /Limited Use/i.test(privacyBody));
-  check("...and links to the policy itself", privacyBody.includes("https://developers.google.com/terms/api-services-user-data-policy"));
+  check("...and links to the policy itself", /<a href="https:\/\/developers\.google\.com\/terms\/api-services-user-data-policy"/.test(privacyBody));
   check("the policy says plainly that sign-in also uses openid and email", /openid/i.test(privacyBody) && /email/i.test(privacyBody) && !/One Google permission only/i.test(privacyBody));
   check("the policy no longer claims a database copy yields no credentials at all", !/does not yield working credentials/i.test(privacyBody));
   check("the policy discloses that backups can retain erased data until they expire", /backups/i.test(privacyBody) && /30 days/i.test(privacyBody));
