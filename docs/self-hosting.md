@@ -335,6 +335,7 @@ deployment needs.
 | `GSC_RATE_LIMIT_PER_MIN` | 60 | Requests per user per minute; `429` with `Retry-After` |
 | `GSC_MAX_TOTAL_ROWS` | 25000 | Rows one Search Analytics query may accumulate; ~17 MB peak per query |
 | `GSC_MAX_REGISTERED_CLIENTS` | 10000 | Client registrations kept at once; the oldest never-used are evicted first. `oauth` mode only |
+| `GSC_CONTENT_SIGNAL` | `search=yes, ai-input=yes, ai-train=yes` | What `robots.txt` tells AI systems they may do with the public pages ([Cloudflare's Content-Signal](https://contentsignals.org)): search results, live answers, model training. Only `signal=yes\|no` pairs are accepted; anything else is ignored with a log line |
 | `GSC_GOOGLE_TIMEOUT_MS` | 60000 | Deadline on each Google API call |
 | `GSC_MAX_CONCURRENT_FETCHES` | 3 | Outbound fetches of caller-supplied URLs, process-wide |
 | `GSC_MAX_CONCURRENT_GSC_QUERIES` | 6 | Search Analytics queries in flight, process-wide |

@@ -14,7 +14,8 @@ import {
   ALL_TOOL_NAMES, AUTHOR, EXAMPLES, GUIDES, PRODUCT_NAME, PROPERTY_INDEPENDENT, README_URL, SELF_HOSTING_DOC_URL,
   SERVER_VERSION, SITE_UPDATED, SITE_URL_NOTE, TOOL_GROUPS, UPSTREAM, WRITE_TOOLS, humanDate, type ToolDoc, type ToolGroup,
 } from "./site-content.js";
-import { breadcrumbJsonLd, canonicalBase, crumbs, esc, shell, type Crumb } from "./web-theme.js";
+import { breadcrumbJsonLd, canonicalBase, crumbs, esc, markdownPathFor, shell, type Crumb } from "./web-theme.js";
+import { htmlToMarkdown } from "./markdown.js";
 import {
   SPARK, aboutBlock, authorJsonLd, claudeInstallUrl, exampleFigure, landingPage, privacyPage,
   type SiteInfo,
@@ -94,6 +95,7 @@ ${o.bodyHtml}
     stars: o.info.stars,
     contactEmail: o.info.contactEmail,
     canonical: base ? `${base}${o.path}` : undefined,
+    markdownPath: markdownPathFor(o.path),
     jsonLd: [article, author, ...breadcrumbJsonLd(trail, base, o.path)],
   });
 }
@@ -582,6 +584,54 @@ export const PUBLIC_PAGES: PublicPage[] = [
   { path: "/privacy", render: privacyPage },
 ];
 
+const PAGE_BY_PATH = new Map(PUBLIC_PAGES.map((p) => [p.path, p]));
+
+/**
+ * Links to another registered page are pointed at that page's Markdown, so an
+ * agent that follows a link stays in Markdown even if it does not negotiate.
+ * Everything else (the MCP endpoint, GitHub, an #anchor on this page) is left
+ * as written. An absolute link to this deployment's own origin is rewritten too.
+ */
+function rewriteInternalLink(href: string, base: string | undefined): string {
+  const m = /^([^?#]*)([?#][\s\S]*)?$/.exec(href);
+  if (!m) return href;
+  let path = m[1];
+  let origin = "";
+  if (base && path.startsWith(`${base}/`)) {
+    origin = base;
+    path = path.slice(base.length);
+  }
+  return PAGE_BY_PATH.has(path) ? `${origin}${markdownPathFor(path)}${m[2] ?? ""}` : href;
+}
+
+/**
+ * Rendering is the expensive half of serving a page and parsing it back is the
+ * rest, so the conversion is remembered: it is redone only when the HTML it came
+ * from changes (the star count in the header is the one thing that does, hourly).
+ * One entry per page and variant, so it cannot grow.
+ */
+const markdownCache = new Map<string, { html: string; markdown: string }>();
+
+/**
+ * A page as Markdown, generated from the HTML the browser gets so the two cannot
+ * drift. `footer` appends the trademark notice that sits in the page footer,
+ * which is outside <main> but is a statement a reader of either form should see.
+ */
+export function pageMarkdown(page: PublicPage, info: SiteInfo, options: { footer?: boolean } = {}): string {
+  const html = page.render(info);
+  const key = `${page.path}|${info.publicUrl}|${options.footer ? "footer" : "body"}`;
+  const hit = markdownCache.get(key);
+  if (hit && hit.html === html) return hit.markdown;
+
+  const base = canonicalBase(info.publicUrl);
+  const markdown = htmlToMarkdown(html, {
+    select: options.footer ? ["main", "footer .note"] : ["main"],
+    rewriteHref: (href) => rewriteInternalLink(href, base),
+  });
+  markdownCache.set(key, { html, markdown });
+  return markdown;
+}
+
 /** The sitemap for a published origin. */
 export function sitemapXml(base: string): string {
   const urls = PUBLIC_PAGES
@@ -611,20 +661,48 @@ export function llmsTxt(info: SiteInfo): string {
     `Version ${SERVER_VERSION}; content updated ${SITE_UPDATED}.`,
     "",
     "## Setup",
-    `- [Connect to claude.ai and Claude Desktop](${base}/claude): custom connector, Google sign-in, troubleshooting`,
-    `- [Use it in Claude Code](${base}/claude-code): claude mcp add, scopes, sign-in with /mcp`,
-    `- [Self-host it](${base}/self-host): run locally over stdio or as your own remote server`,
+    `- [Connect to claude.ai and Claude Desktop](${base}${markdownPathFor("/claude")}): custom connector, Google sign-in, troubleshooting`,
+    `- [Use it in Claude Code](${base}${markdownPathFor("/claude-code")}): claude mcp add, scopes, sign-in with /mcp`,
+    `- [Self-host it](${base}${markdownPathFor("/self-host")}): run locally over stdio or as your own remote server`,
     "",
     "## Tools",
-    ...TOOL_GROUPS.map((g) => `- [${g.title}](${base}${g.path}): ${g.tools.map((t) => t.name).join(", ")}`),
+    ...TOOL_GROUPS.map((g) => `- [${g.title}](${base}${markdownPathFor(g.path)}): ${g.tools.map((t) => t.name).join(", ")}`),
     `- Not available on the hosted instance (need write access): ${WRITE_TOOLS.join(", ")}`,
     "",
     "## Policies and source",
-    `- [Privacy policy](${base}/privacy)`,
+    `- [Privacy policy](${base}${markdownPathFor("/privacy")})`,
     ...(info.repoUrl ? [`- [Source code](${info.repoUrl})`] : []),
+    "",
+    "## Optional",
+    `- [Every page above as one Markdown file](${base}/llms-full.txt): the full text, for a client that wants it in one request`,
     "",
   ];
   return lines.join("\n");
+}
+
+/**
+ * /llms-full.txt: every public page as Markdown in one file. The site documents
+ * every tool with its parameters and defaults, which is exactly what an agent
+ * wants in a single request rather than ten, so this ships instead of
+ * redirecting to the overview. Built from the same per-page Markdown as the
+ * .md routes. The trademark notice is stated once, at the end.
+ */
+export function llmsFullTxt(info: SiteInfo): string {
+  const base = canonicalBase(info.publicUrl) ?? "";
+  const parts = [
+    `# ${PRODUCT_NAME}: full text`,
+    "",
+    `> Every public page of this site as Markdown, in one file. The index is ${base}/llms.txt; each page is also served on its own at its .md address.`,
+    "",
+  ];
+  for (const page of PUBLIC_PAGES) {
+    parts.push("---", "", `Source: ${base}${page.path}`, "", pageMarkdown(page, info).trimEnd(), "");
+  }
+  // The notice lives only in the footer template; read it from there rather than
+  // keep a second copy that could disagree with it.
+  const notice = htmlToMarkdown(PUBLIC_PAGES[0].render(info), { select: ["footer .note"] }).trim();
+  parts.push("---", "", notice, "");
+  return parts.join("\n");
 }
 
 /** Every tool name the pages mention, for the test that pins them to the server. */

@@ -251,7 +251,7 @@ a{color:inherit;text-underline-offset:.18em;
 a:hover{text-decoration-color:currentColor}
 /* Google's own convention: content links are blue, chrome stays neutral —
    the same split as Search Console's sidebar, where every item is gray except
-   the active one. Scoped to <main> so header/footer nav (logo, GH pill, the
+   the active one. Scoped to the main element so header/footer nav (logo, GH pill, the
    footer link list) stay neutral chrome rather than turning into link-blue. */
 main a{color:var(--brand)}
 strong{font-weight:700}
@@ -358,7 +358,7 @@ const COMPONENTS = `
 .crumbs li + li::before{content:"/";margin-right:.35rem;opacity:.6}
 .crumbs a{color:inherit}
 /* Real tool output. No JavaScript is allowed here, so the expandable blocks on
-   the landing page are plain <details>, which needs none. */
+   the landing page are plain details elements, which need none. */
 .example{margin:0 0 1.5rem}
 .example pre{max-height:26rem;overflow:auto}
 .example figcaption{margin:0 0 .6rem}
@@ -433,6 +433,15 @@ export function repoLink(repoUrl: string, stars?: number): string {
     `${GITHUB_MARK}<span class="gh-label">${esc(label)}</span>${counter}</a>`;
 }
 
+/**
+ * Where a page's Markdown lives: /claude.md for /claude, and /index.md for the
+ * root. A path suffix rather than a query string so it is an ordinary
+ * cacheable URL that a link can point at.
+ */
+export function markdownPathFor(path: string): string {
+  return path === "/" ? "/index.md" : `${path}.md`;
+}
+
 export interface ShellOptions {
   title: string;
   description?: string;
@@ -450,6 +459,13 @@ export interface ShellOptions {
   canonical?: string;
   /** Structured data objects, emitted as application/ld+json. */
   jsonLd?: unknown[];
+  /**
+   * Where this page's Markdown representation lives. Advertised as
+   * <link rel="alternate" type="text/markdown"> for the crawlers that read the
+   * DOM; the same pointer goes out as an HTTP Link header for fetchers that
+   * never read the body (see http.ts).
+   */
+  markdownPath?: string;
 }
 
 export interface Crumb {
@@ -544,6 +560,7 @@ export function shell(o: ShellOptions): string {
     `<title>${esc(o.title)}</title>`,
     o.description ? `<meta name="description" content="${esc(o.description)}">` : "",
     o.noindex ? `<meta name="robots" content="noindex">` : "",
+    o.markdownPath ? `<link rel="alternate" type="text/markdown" href="${esc(o.markdownPath)}">` : "",
     social,
     icons,
     `<style>${THEME_CSS}</style>`,
@@ -573,6 +590,7 @@ ${GUIDES.map((g) => `<li><a href="${esc(g.path)}">${esc(g.label)}</a></li>`).joi
 <ul class="foot-links">
 <li><a href="/">Overview</a></li>
 <li><a href="/privacy">Privacy</a></li>
+<li><a href="/llms.txt">llms.txt</a></li>
 ${repoFoot}${contact}
 <li><a href="https://k-o.pro" rel="noopener">k-o.pro</a></li>
 </ul>

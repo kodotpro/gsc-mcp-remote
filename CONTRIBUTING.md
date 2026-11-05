@@ -74,6 +74,7 @@ A few things reviewers will look for:
 | `src/tools/` | One file per tool's implementation |
 | `src/web-pages.ts` | The public `/` and `/privacy` pages, and the pieces the guides share |
 | `src/web-guides.ts` | The guide pages, plus the page registry that routes, the sitemap and `/llms.txt` read |
+| `src/markdown.ts`, `src/negotiate.ts`, `src/robots.ts` | The Markdown form of each page (generated from its HTML, never written by hand), the `Accept` rules that choose between them, and `robots.txt` with its Content-Signal |
 | `src/site-content.ts` | What the pages say: tool docs and defaults, real example output, FAQ |
 | `scripts/` | The four credential-free suites, plus the local OAuth rehearsal |
 

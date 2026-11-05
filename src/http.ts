@@ -47,8 +47,10 @@ import { runWithUserContext, type UserContext } from "./request-context.js";
 import { deniedPage } from "./auth/consent.js";
 import { AUTH_COOKIE, clearAuthCookieHeader, readCookie } from "./auth/browser-binding.js";
 import { type SiteInfo } from "./web-pages.js";
-import { PUBLIC_PAGES, llmsTxt, sitemapXml } from "./web-guides.js";
-import { FONT_ROUTES, IMAGE_ROUTES, canonicalBase } from "./web-theme.js";
+import { PUBLIC_PAGES, llmsFullTxt, llmsTxt, pageMarkdown, sitemapXml, type PublicPage } from "./web-guides.js";
+import { FONT_ROUTES, IMAGE_ROUTES, canonicalBase, markdownPathFor } from "./web-theme.js";
+import { chooseRepresentation } from "./negotiate.js";
+import { CONTENT_SIGNAL_DEFAULT, resolveContentSignal, robotsTxt } from "./robots.js";
 import { currentStars, startStarPolling } from "./github-stars.js";
 import { trimTrailingSlashes } from "./path-utils.js";
 
@@ -535,26 +537,73 @@ export async function startHttpServer(): Promise<HttpServer> {
     }
     next();
   });
+
+  /**
+   * Two representations of every page: HTML, and Markdown for the coding agents
+   * (Claude Code, Cursor and others) that ask for it. Both are reachable two
+   * ways — the page's own URL, where `Accept` decides (chooseRepresentation
+   * holds the rules), and a plain /page.md URL that always answers Markdown
+   * whatever the client sent, because an explicit address is not a negotiation.
+   *
+   * Both responses say `Vary: Accept` so a shared cache keeps them apart, and
+   * each points at the other with a Link header, for fetchers that never read
+   * the body (the same pointer is in the HTML head for the ones that do).
+   *
+   * The .md address names the HTML page as canonical. It is a copy of the same
+   * article at a second URL, which is exactly the duplicate a search engine
+   * would otherwise have to guess about, and this site has already seen what an
+   * ambiguous URL pair costs it.
+   */
+  const publicOrigin = canonicalBase(siteInfo.publicUrl);
+  const pageInfo = () => ({ ...siteInfo, stars: currentStars() });
+  const sendMarkdown = (res: Response, page: PublicPage, atMarkdownUrl: boolean) => {
+    res.set("Content-Type", "text/markdown; charset=utf-8");
+    if (atMarkdownUrl) {
+      res.append("Link", `<${page.path}>; rel="alternate"; type="text/html"`);
+      if (publicOrigin) res.append("Link", `<${publicOrigin}${page.path}>; rel="canonical"`);
+    }
+    res.send(pageMarkdown(page, pageInfo(), { footer: true }));
+  };
   for (const page of PUBLIC_PAGES) {
-    app.get(page.path, (_req: Request, res: Response) => {
-      res.type("html").send(page.render({ ...siteInfo, stars: currentStars() }));
+    const mdPath = markdownPathFor(page.path);
+    app.get(page.path, (req: Request, res: Response) => {
+      res.vary("Accept");
+      const choice = chooseRepresentation(req.headers.accept);
+      if (choice === null) {
+        // Neither is acceptable. Saying so beats substituting one silently,
+        // which would hide the client's bug from the person who wrote it.
+        res.status(406).type("text/plain; charset=utf-8")
+          .send("Not Acceptable: this URL is served as text/html or text/markdown.\n");
+        return;
+      }
+      if (choice === "markdown") {
+        sendMarkdown(res, page, false);
+        return;
+      }
+      res.append("Link", `<${mdPath}>; rel="alternate"; type="text/markdown"`);
+      res.type("html").send(page.render(pageInfo()));
+    });
+    app.get(mdPath, (_req: Request, res: Response) => {
+      res.vary("Accept");
+      sendMarkdown(res, page, true);
     });
   }
 
   app.get("/llms.txt", (_req: Request, res: Response) => {
     res.type("text/plain; charset=utf-8").send(llmsTxt(siteInfo));
   });
+  app.get("/llms-full.txt", (_req: Request, res: Response) => {
+    res.type("text/plain; charset=utf-8").send(llmsFullTxt(pageInfo()));
+  });
 
-  /**
-   * Crawler directives. Only meaningful on a published deployment: without a
-   * real https origin there is no sitemap URL worth advertising, and a
-   * localhost instance has nothing to crawl.
-   */
+  const signal = resolveContentSignal(process.env.GSC_CONTENT_SIGNAL);
+  if (signal.ignored) {
+    console.error(`[robots] ignoring GSC_CONTENT_SIGNAL: expected e.g. "${CONTENT_SIGNAL_DEFAULT}"`);
+  }
+
+  // Crawler directives, and what AI systems may do with the pages: see robots.ts.
   app.get("/robots.txt", (_req: Request, res: Response) => {
-    const base = canonicalBase(siteInfo.publicUrl);
-    const lines = ["User-agent: *", "Allow: /", "Disallow: /oauth/", "Disallow: /mcp"];
-    if (base) lines.push("", `Sitemap: ${base}/sitemap.xml`);
-    res.type("text/plain").send(lines.join("\n") + "\n");
+    res.type("text/plain").send(robotsTxt({ base: canonicalBase(siteInfo.publicUrl), contentSignal: signal.value }));
   });
 
   app.get("/sitemap.xml", (_req: Request, res: Response) => {

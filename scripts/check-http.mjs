@@ -29,7 +29,7 @@
  */
 import { spawn } from "node:child_process";
 import { readFileSync } from "node:fs";
-import { formatStars, repoLink } from "../dist/web-theme.js";
+import { formatStars, markdownPathFor, repoLink } from "../dist/web-theme.js";
 import { landingPage } from "../dist/web-pages.js";
 import { PUBLIC_PAGES, sitemapXml } from "../dist/web-guides.js";
 import { GUIDES, PRODUCT_NAME } from "../dist/site-content.js";
@@ -449,8 +449,86 @@ try {
   check("/llms.txt is served as text", llms.ok && /text\/plain/.test(llms.headers.get("content-type") ?? ""),
     `got ${llms.status} ${llms.headers.get("content-type")}`);
   check("/llms.txt names the MCP endpoint", llmsBody.includes("/mcp "));
-  check("/llms.txt links every guide", GUIDES.every((g) => llmsBody.includes(`${g.path})`)),
-    GUIDES.filter((g) => !llmsBody.includes(`${g.path})`)).map((g) => g.path).join(", "));
+  // Pointed at the Markdown, not the HTML: an agent following the index should
+  // land on the clean form without having to negotiate for it.
+  const guideLink = (g) => `${markdownPathFor(g.path)})`;
+  check("/llms.txt links every guide, as Markdown", GUIDES.every((g) => llmsBody.includes(guideLink(g))),
+    GUIDES.filter((g) => !llmsBody.includes(guideLink(g))).map((g) => g.path).join(", "));
+  check("/llms.txt links no HTML page", !GUIDES.some((g) => llmsBody.includes(`${g.path})`)));
+  for (const target of new Set([...llmsBody.matchAll(/\]\((\/[^)]*)\)/g)].map((m) => m[1]))) {
+    const res = await fetch(`${BASE}${target}`);
+    check(`/llms.txt link ${target} resolves`, res.status === 200, `got ${res.status}`);
+  }
+
+  // -- Markdown representations ------------------------------------------------
+  // Every page is also Markdown, for the coding agents that ask for it. How the
+  // choice is made has its own suite (check-markdown.mjs); what is checked here
+  // is what only a running server can show: the headers, the routes, and that
+  // the two ways of asking return the same document.
+  const varies = (res) => /(^|,\s*)Accept(\s*,|$)/i.test(res.headers.get("vary") ?? "");
+  for (const { path } of PUBLIC_PAGES) {
+    const mdPath = markdownPathFor(path);
+    const md = await fetch(`${BASE}${mdPath}`);
+    const mdBody = await md.text();
+    check(`${mdPath} serves Markdown`, md.status === 200 && /^text\/markdown/.test(md.headers.get("content-type") ?? ""),
+      `got ${md.status} ${md.headers.get("content-type")}`);
+    check(`${mdPath} has content`, /^#{1} \S/m.test(mdBody), mdBody.slice(0, 80));
+    check(`${mdPath} says Vary: Accept`, varies(md), md.headers.get("vary"));
+    check(`${mdPath} points back at the HTML page`,
+      (md.headers.get("link") ?? "").includes(`<${path}>; rel="alternate"; type="text/html"`), md.headers.get("link"));
+
+    const html = await fetch(`${BASE}${path}`);
+    const htmlBody = await html.text();
+    check(`${path} says Vary: Accept`, varies(html), html.headers.get("vary"));
+    check(`${path} advertises its Markdown in a Link header`,
+      (html.headers.get("link") ?? "").includes(`<${mdPath}>; rel="alternate"; type="text/markdown"`), html.headers.get("link"));
+    check(`${path} advertises its Markdown in the document head`,
+      htmlBody.includes(`<link rel="alternate" type="text/markdown" href="${mdPath}">`));
+
+    const negotiated = await fetch(`${BASE}${path}`, { headers: { Accept: "text/markdown" } });
+    check(`${path} with Accept: text/markdown is the same document as ${mdPath}`,
+      /^text\/markdown/.test(negotiated.headers.get("content-type") ?? "") && (await negotiated.text()) === mdBody);
+    check(`${path} says Vary: Accept on the Markdown too`, varies(negotiated), negotiated.headers.get("vary"));
+  }
+
+  const browserAccept = "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8";
+  const asBrowser = await fetch(`${BASE}/claude`, { headers: { Accept: browserAccept } });
+  check("a browser's Accept header still gets HTML", /^text\/html/.test(asBrowser.headers.get("content-type") ?? ""));
+  const preferHtml = await fetch(`${BASE}/claude`, { headers: { Accept: "text/html, text/markdown;q=0.5" } });
+  check("a client that prefers HTML over Markdown gets HTML", /^text\/html/.test(preferHtml.headers.get("content-type") ?? ""));
+  const agent = await fetch(`${BASE}/claude`, { headers: { Accept: "text/markdown, text/html" } });
+  check("a coding agent that lists Markdown first, both at q=1, gets Markdown",
+    /^text\/markdown/.test(agent.headers.get("content-type") ?? ""));
+  const none = await fetch(`${BASE}/claude`, { headers: { Accept: "image/png" } });
+  check("a client that accepts neither gets 406, not a silent substitute", none.status === 406, `got ${none.status}`);
+  check("the 406 still says Vary: Accept", varies(none), none.headers.get("vary"));
+  const explicit = await fetch(`${BASE}/claude.md`, { headers: { Accept: "image/png" } });
+  check("an explicit .md address is not subject to negotiation", explicit.status === 200
+    && /^text\/markdown/.test(explicit.headers.get("content-type") ?? ""), `got ${explicit.status}`);
+  const missingMd = await fetch(`${BASE}/not-a-page.md`);
+  check("a .md address for no page is a 404", missingMd.status === 404, `got ${missingMd.status}`);
+
+  // The root is /index.md, so there is no page called "index" to collide with.
+  const rootMd = await (await fetch(`${BASE}/index.md`)).text();
+  check("/index.md carries the landing page", rootMd.includes(`# ${PRODUCT_NAME}`), rootMd.slice(0, 100));
+
+  // The whole site in one request: shipped, not redirected, because the guides
+  // document every tool's parameters and defaults.
+  const full = await fetch(`${BASE}/llms-full.txt`);
+  const fullBody = await full.text();
+  check("/llms-full.txt is served as text", full.ok && /^text\/plain/.test(full.headers.get("content-type") ?? ""),
+    `got ${full.status} ${full.headers.get("content-type")}`);
+  check("/llms-full.txt contains every page", PUBLIC_PAGES.every((p) => fullBody.includes(`Source: ${p.path}\n`)),
+    PUBLIC_PAGES.filter((p) => !fullBody.includes(`Source: ${p.path}\n`)).map((p) => p.path).join(", "));
+  check("/llms-full.txt ends with the trademark notice, stated once",
+    /trademarks of Google LLC\.\s*$/.test(fullBody) && (fullBody.match(/trademarks of Google LLC/g) ?? []).length === 1);
+
+  // What AI systems may do with the pages, in the one place crawlers look.
+  const robotLines = robotsBody.split("\n");
+  check("robots.txt carries a Content-Signal inside the * group, before its rules",
+    robotLines[0] === "User-agent: *" && robotLines[1] === "Content-Signal: search=yes, ai-input=yes, ai-train=yes",
+    robotLines.slice(0, 3).join(" | "));
+  check("robots.txt does not block the Markdown pages", !/Disallow: \/(index|[a-z-]+)\.md/.test(robotsBody));
 
   const favicon = await fetch(`${BASE}/favicon.ico`);
   check("/favicon.ico is served", favicon.ok && (favicon.headers.get("content-type") ?? "").startsWith("image/"),

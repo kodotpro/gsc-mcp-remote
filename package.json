@@ -19,7 +19,7 @@
     "start": "node dist/index.js",
     "dev": "tsc --watch",
     "typecheck": "tsc --noEmit",
-    "test": "node scripts/check-tools.mjs && node scripts/check-http.mjs && node scripts/check-oauth.mjs && node scripts/check-hardening.mjs",
+    "test": "node scripts/check-tools.mjs && node scripts/check-markdown.mjs && node scripts/check-http.mjs && node scripts/check-oauth.mjs && node scripts/check-hardening.mjs",
     "try:oauth": "node scripts/try-oauth-local.mjs"
   },
   "keywords": [

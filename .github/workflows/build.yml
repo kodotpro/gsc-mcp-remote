@@ -40,6 +40,11 @@ jobs:
       - name: MCP handshake and tool-schema check (stdio)
         run: node scripts/check-tools.mjs
 
+      # The Markdown form of every public page, and the rules that choose it.
+      # Renders pages straight from dist/, so it needs no server.
+      - name: Markdown representations and content negotiation
+        run: node scripts/check-markdown.mjs
+
       - name: Health, auth and session checks (remote HTTP, bearer)
         run: node scripts/check-http.mjs
 

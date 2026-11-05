@@ -27,7 +27,7 @@ import {
   AUTHOR, ASSETS, CHANGELOG_URL, COMPARISON, EXAMPLES, FAQ, PRODUCT_NAME, SERVER_VERSION,
   SITE_UPDATED, TOOL_GROUPS, UPSTREAM, humanDate, type Example, type ToolGroup,
 } from "./site-content.js";
-import { canonicalBase, esc, shell } from "./web-theme.js";
+import { canonicalBase, esc, shell, markdownPathFor } from "./web-theme.js";
 
 export interface SiteInfo {
   /** Public base URL, e.g. https://gsc.example.com */
@@ -67,11 +67,18 @@ export const SPARK =
 
 // -- pieces shared with the guide pages --------------------------------------
 
-/** "Google Search Console MCP Server" on the first line, the rest under it. */
+/**
+ * "Google Search Console MCP Server" on the first line, the rest under it.
+ *
+ * The space between the two halves is kept in the markup. The sub-line is a
+ * block, so the space is invisible on screen — but without it every reader that
+ * works from the text (a crawler, an AI fetcher, a screen reader's text view)
+ * gets "...Server- by k-o.pro (remote)" as the page's one h1.
+ */
 export function productH1(): string {
   const cut = PRODUCT_NAME.indexOf(" - ");
   if (cut < 0) return `<h1>${esc(PRODUCT_NAME)}</h1>`;
-  return `<h1>${esc(PRODUCT_NAME.slice(0, cut))}<span class="h1-sub">${esc(PRODUCT_NAME.slice(cut + 1))}</span></h1>`;
+  return `<h1>${esc(PRODUCT_NAME.slice(0, cut))} <span class="h1-sub">${esc(PRODUCT_NAME.slice(cut + 1))}</span></h1>`;
 }
 
 export function toolTable(group: ToolGroup): string {
@@ -383,6 +390,7 @@ export function landingPage(info: SiteInfo): string {
     stars: info.stars,
     contactEmail: info.contactEmail,
     canonical: base ? `${base}/` : undefined,
+    markdownPath: markdownPathFor("/"),
     jsonLd,
   });
 }
@@ -521,5 +529,6 @@ export function privacyPage(info: SiteInfo): string {
     stars: info.stars,
     contactEmail: info.contactEmail,
     canonical: base ? `${base}/privacy` : undefined,
+    markdownPath: markdownPathFor("/privacy"),
   });
 }

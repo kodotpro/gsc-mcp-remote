@@ -321,7 +321,8 @@ npm test
 | Suite | Covers |
 |---|---|
 | `check-tools.mjs` | Every tool registers over stdio; the right ones expose `site_url`; every tool and parameter default the public pages print matches the registered schema |
-| `check-http.mjs` | Health, token enforcement, sessions, the capacity limits and their `Retry-After`, the idle sweeper, the public pages and their anti-framing headers, that every self-hosted font the pages reference is actually served from `dist/`, and that every registered page is served, linked internally without a 404, listed in the sitemap and `/llms.txt`, and reachable at one URL only |
+| `check-markdown.mjs` | Every public page's Markdown form against its HTML (headings, code blocks, table rows, links, and no lost words), the `Accept` negotiation rules row by row, `llms-full.txt`, and `robots.txt`'s Content-Signal |
+| `check-http.mjs` | Health, token enforcement, sessions, the capacity limits and their `Retry-After`, the idle sweeper, the public pages and their anti-framing headers, that every self-hosted font the pages reference is actually served from `dist/`, and that every registered page is served, linked internally without a 404, listed in the sitemap and `/llms.txt`, and reachable at one URL only, plus the Markdown routes and the headers that go with them (`Vary: Accept`, `Link`, 406) |
 | `check-oauth.mjs` | The sandwich, PKCE, single-use codes, refresh rotation and reuse-burning, audience binding, the revocation cascade, DCR, cross-user session rejection, and that `disconnect_account` leaves no row anywhere |
 | `check-hardening.mjs` | SSRF classification across 34 address forms, fetch deadlines and byte caps against a hostile server, redirect re-validation, report-path confinement, image format gating |
 
