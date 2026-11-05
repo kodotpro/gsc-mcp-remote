@@ -414,6 +414,16 @@ const info2 = await provider.verifyAccessToken(tokens2.access_token);
 const userId = info2.extra.userId;
 
 check("google refresh token retrievable from vault", provider.getGoogleRefreshToken(userId) === "google-rt-1");
+{
+  // SECURITY.md promises these two; they are asserted here rather than assumed.
+  const sha256 = (v) => createHash("sha256").update(v).digest("hex");
+  const hashes = db.prepare("SELECT token_hash FROM access_tokens UNION ALL SELECT token_hash FROM refresh_tokens").all().map((r) => r.token_hash);
+  check("MCP tokens are stored only as SHA-256 hashes", hashes.includes(sha256(tokens2.access_token)) && hashes.includes(sha256(tokens2.refresh_token)) && !hashes.includes(tokens2.access_token) && !hashes.includes(tokens2.refresh_token));
+  const everything = JSON.stringify(["users", "google_tokens", "access_tokens", "refresh_tokens", "auth_codes", "pending_authorizations", "oauth_clients", "user_settings"].map((t) => db.prepare(`SELECT * FROM ${t}`).all()));
+  check("no table holds a plaintext MCP token anywhere", !everything.includes(tokens2.access_token) && !everything.includes(tokens2.refresh_token));
+  const enc = db.prepare("SELECT refresh_token_enc FROM google_tokens WHERE user_id = ?").get(userId).refresh_token_enc;
+  check("the Google refresh token is stored only as vault ciphertext", /^v1:/.test(enc) && !everything.includes("google-rt-1"));
+}
 provider.setDefaultProperty(userId, "sc-domain:example.com");
 check("per-user default property persists", provider.getDefaultProperty(userId) === "sc-domain:example.com");
 

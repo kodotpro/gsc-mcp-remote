@@ -427,7 +427,7 @@ export function privacyPage(info: SiteInfo): string {
     <tr><td>Your chosen default property, if you set one</td>
         <td>So tool calls that do not name a property can use it</td></tr>
     <tr><td>Irreversible hashes of the access tokens issued to your Claude client</td>
-        <td>To recognise valid requests. The tokens themselves are never stored, so a copy of the database does not yield working credentials</td></tr>
+        <td>To recognise valid requests. The tokens themselves are never stored, so a copy of the database does not yield working access tokens</td></tr>
     <tr><td>Server logs: session open and close events, errors, timestamps</td>
         <td>To keep the service running and diagnose failures</td></tr>
   </table>
@@ -448,8 +448,9 @@ export function privacyPage(info: SiteInfo): string {
   </ul>
 
   <h2>What access is requested</h2>
-  <p>One Google permission only: <code>https://www.googleapis.com/auth/webmasters.readonly</code>,
-     plus your email address for identification. This is read-only. The service
+  <p>One Search Console permission: <code>https://www.googleapis.com/auth/webmasters.readonly</code>.
+     This is read-only. Signing in also uses Google's basic <code>openid</code>
+     and <code>email</code> scopes, solely to identify your account. The service
      cannot submit URLs for indexing, change sitemaps, modify your properties,
      or reach any other Google service. Google's own Search Console permissions
      still apply on top: you see exactly the properties Google would show you.</p>
@@ -473,6 +474,16 @@ export function privacyPage(info: SiteInfo): string {
      model. The only third party involved is Google, whose API is called on your
      behalf with the permission you granted.</p>
 
+  <h2>Google API user data</h2>
+  <p>This service's use and transfer to any other app of information received
+     from Google APIs will adhere to the
+     <a href="https://developers.google.com/terms/api-services-user-data-policy" rel="noopener">Google API Services User Data Policy</a>,
+     including the Limited Use requirements. Data obtained through the Search
+     Console API is transferred only to your own Claude client, in answer to the
+     questions you ask there. It is not transferred to anyone else, not used for
+     advertising, and not used to develop, improve or train any machine-learning
+     or AI model.</p>
+
   <h2>How long it is kept, and how to delete it</h2>
   <p>Data is kept until you remove it. You can do that at any time, in either of
      two ways, and doing either is enough:</p>
@@ -487,6 +498,9 @@ export function privacyPage(info: SiteInfo): string {
   </ul>
   <p>Run <code>export_my_data</code> at any time to see everything held about you.
      Expired tokens and abandoned sign-in attempts are swept automatically.</p>
+  <p>If the operator keeps backups of the database, an erased connection can
+     remain in those backups until they expire (up to 30 days by default). Stored
+     credentials in a backup stay encrypted with a key that is kept outside it.</p>
 
   <h2>Changes</h2>
   <p>If this policy changes materially, the change will appear on this page. The

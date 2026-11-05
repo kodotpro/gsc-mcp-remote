@@ -64,7 +64,7 @@ To rehearse the **per-user OAuth flow** with a real Google sign-in, see [Rehears
 
 Written against a VPS running CloudPanel, the reference deployment; any Docker host with a reverse proxy works the same way, and only the proxy step differs.
 
-**1. DNS.** Point an `A` record at the server. On Cloudflare, set it to **DNS-only (grey cloud)** — the proxy adds buffering and a 100-second hard timeout you do not want in front of a streaming protocol, and it complicates certificate issuance.
+**1. DNS.** Point an `A` record at the server. On Cloudflare, prefer **DNS-only (grey cloud)** — the proxy adds buffering and a 100-second hard timeout you do not want in front of a streaming protocol, and it complicates certificate issuance. If you do turn the proxy on, read [Behind Cloudflare](#behind-cloudflare) first: it changes which address the server sees for every client.
 
 **2. Get the code on the box:**
 
@@ -78,11 +78,17 @@ git clone https://github.com/kodotpro/gsc-mcp-remote.git /opt/gsc-mcp && cd /opt
 cp .env.example .env && openssl rand -hex 32
 ```
 
-Set at minimum `GSC_HTTP_TOKEN` (bearer mode) and `GSC_HTTP_ALLOWED_HOSTS` to your public hostname. The container runs as uid 1000, so give it the volume:
+Set at minimum `GSC_HTTP_TOKEN` (bearer mode) and `GSC_HTTP_ALLOWED_HOSTS` to your public hostname. The container runs as uid 1000, so give it the volume. Then make the secrets private — `.env` holds your tokens and client secret, and the data directory holds every user's email, token hashes and registered clients' secrets, so no other account on the host should be able to read them:
 
 ```bash
-mkdir -p data secrets && chown -R 1000:1000 data
+mkdir -p data/.gsc-mcp secrets && chown -R 1000:1000 data
 ```
+
+```bash
+chmod 600 .env && chmod 700 data/.gsc-mcp && chmod 750 /opt/gsc-mcp
+```
+
+(The server also tightens its own database and key files to `0600` at start, whatever the host's default umask, but the directory and `.env` are yours to secure. Docker's daemon does the bind mount as root, so locking down the host path does not affect the container.)
 
 **4. Google credentials.** A headless server cannot complete an interactive OAuth flow — that needs a browser on the same machine. In bearer mode, mint the token somewhere with a browser and copy it up:
 
@@ -94,6 +100,12 @@ scp ~/.gsc-mcp/oauth-token.json root@YOUR_SERVER:/opt/gsc-mcp/data/.gsc-mcp/oaut
 scp /path/to/client_secret.json root@YOUR_SERVER:/opt/gsc-mcp/secrets/client_secret.json
 ```
 
+Then make both files readable by the container user only:
+
+```bash
+chown 1000:1000 data/.gsc-mcp/oauth-token.json secrets/client_secret.json && chmod 600 data/.gsc-mcp/oauth-token.json secrets/client_secret.json
+```
+
 Prefer a `readonly` token for a hosted deployment. A service account is the alternative (`GSC_AUTH_MODE=service_account`, `GSC_KEY_FILE=/secrets/service-account.json`). **In OAuth mode none of this applies** — each user signs in for themselves.
 
 **5. Start it.** The container publishes to loopback only; the reverse proxy is the only thing that reaches it.
@@ -101,6 +113,8 @@ Prefer a `readonly` token for a hosted deployment. A service account is the alte
 ```bash
 docker compose up -d --build && curl -s http://127.0.0.1:8787/healthz
 ```
+
+**In OAuth mode, also turn on backups** (see [Backups](#backups)): set the `LITESTREAM_*` values in `.env` and start with `docker compose --profile backup up -d --build` instead. Without the profile the replication sidecar never starts, and nothing says so.
 
 **6. Reverse proxy.** In CloudPanel: **Sites → Add Site → Create a Reverse Proxy**, destination `http://127.0.0.1:8787`, then **Manage Site → SSL/TLS → New Let's Encrypt Certificate**. Do **not** install Caddy or another proxy alongside CloudPanel — its nginx already owns ports 80 and 443.
 
@@ -110,13 +124,32 @@ Make sure the proxy does not buffer:
 proxy_buffering off;
 proxy_read_timeout 300s;
 proxy_set_header Host $host;
+proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
 ```
+
+The `X-Forwarded-For` line is not optional in OAuth mode. The server trusts exactly one proxy hop (`trust proxy` is `1`), and the per-IP limits on registration, authorization and token requests key on the address that hop reports. Without the header every client shares the proxy's address, so one busy user spends everyone's budget.
 
 **7. Verify from outside:**
 
 ```bash
 curl -s https://gsc.example.com/healthz
 ```
+
+## Behind Cloudflare
+
+DNS-only is simplest, but if you turn the orange cloud on, three things need attention.
+
+**1. Restore the real client address.** Behind the proxy, nginx's `$remote_addr` is a Cloudflare edge address, so Express's `req.ip` becomes that edge address and every client routed through it shares one rate-limit bucket (the SDK allows 20 registrations an hour per address). Do not "fix" it by trusting two hops in the app: anyone who reaches your origin directly could then forge the address. Fix it in nginx, where the trusted ranges can be stated. Generate the lines:
+
+```bash
+for r in $(curl -s https://www.cloudflare.com/ips-v4 https://www.cloudflare.com/ips-v6); do echo "set_real_ip_from $r;"; done
+```
+
+Put that output in a file under `/etc/nginx/conf.d/`, add `real_ip_header CF-Connecting-IP;` to the same file, then `nginx -t` and reload. Express keeps `trust proxy` at `1` and now sees the visitor.
+
+**2. Do not challenge the API.** A managed challenge or bot rule on `/mcp`, `/register`, `/token`, `/revoke` or `/.well-known/*` blocks non-browser MCP clients intermittently. Add a WAF custom rule that skips bot and challenge features for those paths.
+
+**3. Lock the origin.** Allow ports 80 and 443 from Cloudflare's published ranges only (your cloud firewall or `ufw`), so the origin cannot be reached around the proxy.
 
 ## Turn on per-user Google sign-in
 
@@ -128,7 +161,7 @@ This is what makes the server usable by anyone with a Google account.
    https://gsc.example.com/oauth/google/callback
    ```
 3. In `.env`: `GSC_HTTP_AUTH=oauth`, `GSC_PUBLIC_URL=https://gsc.example.com`, `GSC_GOOGLE_CLIENT_ID`, `GSC_GOOGLE_CLIENT_SECRET`, and `GSC_CONTACT_EMAIL`.
-4. `docker compose up -d --build`
+4. `docker compose --profile backup up -d --build` (without `--profile backup` there is no replication; see [Backups](#backups))
 
 Optional extra gates: `GSC_ALLOWED_EMAILS`, `GSC_ALLOWED_EMAIL_DOMAINS`.
 
@@ -160,7 +193,9 @@ docker compose --profile backup run --rm --no-deps --entrypoint litestream lites
 docker compose up -d
 ```
 
-**The vault key is deliberately not replicated.** Those refresh tokens are encrypted with the key at `data/.gsc-mcp/vault.key`; shipping it to the same bucket as the ciphertext would put the lock and the key in one place. Copy its 64 hex characters into a password manager instead. Keep it and a restore is complete; lose it and the restore still works — the stored Google connections are simply dead, and each user reconnects once.
+**The vault key is deliberately not replicated.** Those refresh tokens are encrypted with the key at `data/.gsc-mcp/vault.key`; shipping it to the same bucket as the ciphertext would put the lock and the key in one place. Copy its 64 hex characters into a password manager instead. Keep it and a restore is complete.
+
+**Restore the key BEFORE you start the server.** A missing or mismatched key is never papered over: the server refuses to start when the database holds stored tokens and the key is absent, or when the key opens none of them, and says why. If the original key is truly gone, start once with `GSC_ALLOW_NEW_VAULT_KEY=1` — a new key is created, and each user reconnects once because their stored Google connection can no longer be read. (An unreadable entry met at request time is handled the same way for that one user: it is erased and their client is asked to sign in again.)
 
 ## Operating it
 
@@ -169,8 +204,10 @@ docker compose logs -f --tail 50
 ```
 
 ```bash
-git pull && docker compose up -d --build
+git pull && docker compose --profile backup up -d --build
 ```
+
+(Use plain `docker compose up -d --build` for a bearer-mode deployment, which has no database to back up.)
 
 Logs record session open/close and token refreshes, never tokens or query data. Sessions idle for 30 minutes close automatically.
 
@@ -196,12 +233,12 @@ Memory is capped at 512 MB with Node's heap at 384 MB, deliberately: Search Anal
 |---|---|---|---|
 | Concurrent sessions, server-wide | 120 | `GSC_MAX_SESSIONS` | both modes |
 | Concurrent sessions per user | 8 | `GSC_MAX_SESSIONS_PER_USER` | `oauth` only |
-| Requests per user per minute | 60 | `GSC_RATE_LIMIT_PER_MIN` | both modes |
+| Requests per user per minute | 60 | `GSC_RATE_LIMIT_PER_MIN` | both modes; counts JSON-RPC *messages* (a batch of 100 counts 100) on every `/mcp` request, including `initialize`, GET and DELETE |
 | Rows accumulated per query | 25,000 | `GSC_MAX_TOTAL_ROWS` | both modes |
 | Stored client registrations | 10,000 | `GSC_MAX_REGISTERED_CLIENTS` | `oauth` only |
 | Deadline per Google API call | 60 s | `GSC_GOOGLE_TIMEOUT_MS` | both modes |
 
-Exceeding them returns `429`, or `503` at the server-wide ceiling, with `Retry-After` — rather than an OOM. A query that hits the row ceiling says so in its response instead of quietly reporting partial data. The per-user ceiling needs a per-request identity, so it only means anything in `oauth` mode; bearer mode has one tenant and is bounded by `GSC_MAX_SESSIONS` alone.
+Exceeding them returns `429`, or `503` at the server-wide ceiling, with `Retry-After` — rather than an OOM. A query that hits the row ceiling is cut at that many rows; individual tools do not yet say so in their responses, so raise `GSC_MAX_TOTAL_ROWS` if you have large properties. The per-user ceiling needs a per-request identity, so it only means anything in `oauth` mode; bearer mode has one tenant and is bounded by `GSC_MAX_SESSIONS` alone.
 
 ## What remote mode changes
 
@@ -210,7 +247,7 @@ Two tools behave differently when the server is not on your own machine:
 - **`generate_report`** returns markdown inline instead of writing a file, because a file would land on the server's disk where you could not retrieve it. When it does write, paths are confined to `GSC_REPORT_DIR`.
 - **`image_page_audit`** refuses URLs resolving to private, loopback, link-local or reserved addresses — including the IPv4-mapped IPv6 forms that URL normalisation hides — re-validates the address at connect time so DNS cannot be rebound between check and connect, re-checks every redirect hop, and bounds each fetch with one deadline covering the body plus a byte ceiling.
 
-`submit_url` and `submit_batch` refuse to run in per-user mode rather than quietly acting as the server's own credential.
+`submit_url`, `submit_batch` and `submit_sitemap` refuse to run in per-user mode rather than quietly acting as the server's own credential, and refuse in every mode when `GSC_SCOPES` is `readonly` (any value other than `full` or a spelling of read-only is treated as read-only, with a warning).
 
 ---
 
@@ -277,7 +314,8 @@ deployment needs.
 | `GSC_REPO_URL` | No | Source link shown on `/` |
 | `GSC_ALLOWED_EMAILS` / `GSC_ALLOWED_EMAIL_DOMAINS` | No | Extra sign-in allowlist on top of Google's test-user list |
 | `GSC_OAUTH_DB_FILE` | No | SQLite path (default `~/.gsc-mcp/oauth-server.db`) |
-| `GSC_VAULT_KEY_FILE` | No | Vault key path (default `~/.gsc-mcp/vault.key`, auto-created `0600`) |
+| `GSC_VAULT_KEY_FILE` | No | Vault key path (default `~/.gsc-mcp/vault.key`, auto-created `0600` on first run only) |
+| `GSC_ALLOW_NEW_VAULT_KEY` | Recovery only | Set to `1` for one start to accept a missing or mismatched vault key; every user then reconnects once |
 | `LITESTREAM_*` | For backups | `BUCKET`, `ENDPOINT`, `ACCESS_KEY_ID`, `SECRET_ACCESS_KEY` for the `backup` profile |
 
 ### Limits
@@ -293,6 +331,8 @@ deployment needs.
 | `GSC_MAX_CONCURRENT_FETCHES` | 3 | Outbound fetches of caller-supplied URLs, process-wide |
 | `GSC_MAX_CONCURRENT_GSC_QUERIES` | 6 | Search Analytics queries in flight, process-wide |
 | `GSC_MAX_IMAGE_BYTES` | 3145728 | Per-image ceiling for `image_page_audit` |
+| `GSC_MAX_PAGE_BYTES` | 2097152 | Per-page ceiling for `image_page_audit`; pages with absurd tag counts or nesting are refused before parsing |
+| `GSC_AUDIT_DEADLINE_MS` | 90000 | Total time one `image_page_audit` call may take across all its pages and images |
 | `GSC_REPORT_DIR` | cwd | The only directory `generate_report` may write into |
 
 ---

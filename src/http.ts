@@ -559,7 +559,11 @@ export async function startHttpServer(): Promise<HttpServer> {
     res.type("application/xml").send(sitemapXml(base));
   });
 
-  // Unauthenticated liveness probe. Reveals nothing beyond "the process is up".
+  // Unauthenticated liveness and capacity probe. It reveals the version, auth
+  // mode, session and rate-limit settings, process memory and limiter
+  // saturation: operational detail, but nothing secret and nothing about any
+  // user. (The comment here used to say it revealed nothing beyond "the process
+  // is up", which was not true.)
   app.get("/healthz", (_req: Request, res: Response) => {
     res.json({
       status: "ok",

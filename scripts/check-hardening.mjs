@@ -465,6 +465,8 @@ console.log("\nWrite tools and the scope tier fail closed");
     };
     const hosted = await runWithUserContext(ctx, () => submitSitemap("https://example.com/sitemap.xml", "sc-domain:example.com"));
     check("ATTACK: submit_sitemap refuses for a hosted per-user context, before building any Google client", hosted.success === false && /hosted server/.test(hosted.error ?? ""), hosted.error);
+    const hostedUrl = await runWithUserContext(ctx, () => submitUrl("https://example.com/page"));
+    check("ATTACK: submit_url refuses for a hosted per-user context too", hostedUrl.success === false && /hosted server/.test(hostedUrl.error ?? ""), hostedUrl.error);
   } finally {
     console.error = restoreErr;
     restore();
@@ -745,6 +747,27 @@ console.log("\nimage_page_audit cannot be turned into a shared-process stall");
     delete process.env.GSC_AUDIT_DEADLINE_MS;
     await new Promise((r) => fx2.close(r));
   }
+}
+
+// ---------------------------------------------------------------------------
+console.log("\nThe runbook says what the server needs to be run safely");
+// ---------------------------------------------------------------------------
+// Several of these used to be missing or false: the nginx snippet omitted the
+// header the per-IP limits key on, neither the deploy nor the update command
+// started the backup sidecar, and a sentence promised truncation was reported
+// when no tool reports it. The documentation is operator-facing code.
+{
+  const fs = await import("node:fs");
+  const doc = fs.readFileSync(new URL("../docs/self-hosting.md", import.meta.url), "utf8");
+  const security = fs.readFileSync(new URL("../SECURITY.md", import.meta.url), "utf8");
+  check("the nginx snippet sets X-Forwarded-For", /proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;/.test(doc));
+  check("the deploy path starts the backup profile for OAuth mode", /docker compose --profile backup up -d --build/.test(doc));
+  check("the update command keeps the backup profile running", /git pull && docker compose --profile backup up -d --build/.test(doc));
+  check("the runbook secures .env and the data directory", /chmod 600 \.env/.test(doc) && /chmod 700 data\/\.gsc-mcp/.test(doc));
+  check("the runbook explains Cloudflare's effect on the client address", /## Behind Cloudflare/.test(doc) && /real_ip_header CF-Connecting-IP/.test(doc));
+  check("the runbook documents the vault-key recovery switch", /GSC_ALLOW_NEW_VAULT_KEY/.test(doc));
+  check("the runbook no longer promises truncation is reported", !/says so in its response/.test(doc));
+  check("SECURITY.md no longer says only webmasters.readonly is requested", !/requests only `webmasters\.readonly`/.test(security));
 }
 
 if (failures.length > 0) {
