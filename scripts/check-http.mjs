@@ -31,6 +31,7 @@ import { spawn } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { formatStars, markdownPathFor, repoLink } from "../dist/web-theme.js";
 import { landingPage } from "../dist/web-pages.js";
+import { parse as parseHtml } from "node-html-parser";
 import { PUBLIC_PAGES, sitemapXml } from "../dist/web-guides.js";
 import { GUIDES, PRODUCT_NAME } from "../dist/site-content.js";
 
@@ -421,7 +422,7 @@ try {
   // /compare and /faq now; these ceilings keep them from drifting back.
   {
     const main = rootBody.slice(rootBody.indexOf("<main>"), rootBody.indexOf("</main>"));
-    const words = main.replace(/<style[\s\S]*?<\/style>/g, "").replace(/<[^>]+>/g, " ").split(/\s+/).filter(Boolean).length;
+    const words = parseHtml(main).text.split(/\s+/).filter(Boolean).length;
     check("the landing page is under 1,400 words", words < 1400, `${words} words`);
     check("...has at most six sections", (main.match(/<h2[\s>]/g) ?? []).length <= 6, `${(main.match(/<h2[\s>]/g) ?? []).length} h2`);
     check("...and shows what a result looks like before how to connect",

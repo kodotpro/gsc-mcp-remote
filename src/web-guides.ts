@@ -16,6 +16,7 @@ import {
 } from "./site-content.js";
 import { breadcrumbJsonLd, canonicalBase, crumbs, esc, markdownPathFor, shell, type Crumb } from "./web-theme.js";
 import { htmlToMarkdown } from "./markdown.js";
+import { parse } from "node-html-parser";
 import {
   SPARK, aboutBlock, authorJsonLd, claudeInstallUrl, exampleFigure, landingPage, privacyPage, toolTable,
   type SiteInfo,
@@ -722,8 +723,11 @@ function faqPage(info: SiteInfo): string {
       name: q,
       acceptedAnswer: {
         "@type": "Answer",
-        // Schema.org answers are plain prose; strip the inline markup.
-        text: a.replace(/<[^>]+>/g, ""),
+        // Schema.org answers are plain prose, so the answer is reduced to its
+        // text by the same parser that builds the Markdown pages, not by a
+        // regular expression: one pass of a tag-stripping pattern can leave a
+        // tag behind when tags are nested inside each other's remains.
+        text: parse(a).text,
       },
     })),
   };
