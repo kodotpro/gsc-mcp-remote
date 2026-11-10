@@ -24,10 +24,11 @@
  */
 
 import {
-  AUTHOR, ASSETS, CHANGELOG_URL, COMPARISON, EXAMPLES, FAQ, PRODUCT_NAME, SERVER_VERSION,
-  SITE_UPDATED, TOOL_GROUPS, UPSTREAM, humanDate, type Example, type ToolGroup,
+  AUTHOR, ASSETS, CHANGELOG_URL, PRODUCT_NAME, SERVER_VERSION,
+  SITE_UPDATED, TOOL_GROUPS, UPSTREAM, WHATS_NEW, humanDate, type Example, type ToolGroup,
 } from "./site-content.js";
 import { canonicalBase, esc, shell, markdownPathFor } from "./web-theme.js";
+import { demoQuickWins, demoSnapshot, demoTrafficDrops, flowDiagram } from "./web-demos.js";
 
 export interface SiteInfo {
   /** Public base URL, e.g. https://gsc.example.com */
@@ -77,8 +78,14 @@ export const SPARK =
  */
 export function productH1(): string {
   const cut = PRODUCT_NAME.indexOf(" - ");
-  if (cut < 0) return `<h1>${esc(PRODUCT_NAME)}</h1>`;
-  return `<h1>${esc(PRODUCT_NAME.slice(0, cut))} <span class="h1-sub">${esc(PRODUCT_NAME.slice(cut + 1))}</span></h1>`;
+  // Each word is its own inline-block so it can rise out of a blur in turn
+  // (.hw in web-theme.ts). The spaces stay between the spans, as text, so the
+  // heading still reads as ordinary words to anything that does not animate.
+  const words = (text: string, from: number): string =>
+    text.split(" ").map((w, i) => `<span class="hw" style="--i:${from + i}">${esc(w)}</span>`).join(" ");
+  if (cut < 0) return `<h1>${words(PRODUCT_NAME, 0)}</h1>`;
+  const head = PRODUCT_NAME.slice(0, cut);
+  return `<h1>${words(head, 0)} <span class="h1-sub fade">${esc(PRODUCT_NAME.slice(cut + 1))}</span></h1>`;
 }
 
 export function toolTable(group: ToolGroup): string {
@@ -169,49 +176,41 @@ export function landingPage(info: SiteInfo): string {
   const installUrl = claudeInstallUrl(mcpUrl);
 
   const heroCta = info.perUserSignIn
-    ? `<div class="cta-row">
+    ? `<div class="cta-row fade" style="--d:2">
       <a class="btn glass-brand" href="${esc(installUrl)}" rel="noopener">${SPARK}Add to Claude</a>
       <a class="btn btn-ghost" href="#connecting">Other clients</a>
     </div>
-    <p class="note">No Google Cloud project, no API keys, nothing to install. The button
-       opens claude.ai with the connector pre-filled; you confirm the URL, then sign in
-       with Google.</p>`
+    <p class="note fade" style="--d:3">No Google Cloud project, no API keys, nothing to install.
+       You confirm the URL in claude.ai, then sign in with Google.</p>`
     : "";
 
   const connect = info.perUserSignIn
-    ? `<div class="step">
+    ? `<div class="step st">
     <h3>claude.ai and Claude Desktop</h3>
-    <p>One click adds it with the details filled in — claude.ai will ask you to
-       confirm the address before anything connects:</p>
+    <p>One click adds it with the details filled in. claude.ai asks you to
+       confirm the address before anything connects.</p>
     <div class="cta-row">
       <a class="btn glass-brand" href="${esc(installUrl)}" rel="noopener">${SPARK}Add to Claude</a>
     </div>
-    <p class="note">Prefer to do it by hand? <strong>Settings &rarr; Connectors &rarr;
-       Add custom connector</strong>, and paste the URL below. The
+    <p class="note">By hand: <strong>Settings &rarr; Connectors &rarr; Add custom
+       connector</strong>, and paste <code>${esc(mcpUrl)}</code>. The
        <a href="/claude">Claude setup guide</a> covers sign-in and troubleshooting.</p>
   </div>
-  <div class="step">
+  <div class="step st">
     <h3>Claude Code</h3>
     <pre><code>claude mcp add --transport http gsc ${esc(mcpUrl)}</code></pre>
-    <p class="note">Then run <code>/mcp</code> inside Claude Code to sign in. Scopes and
-       terminal workflows are in the <a href="/claude-code">Claude Code guide</a>.</p>
+    <p class="note">Then run <code>/mcp</code> inside Claude Code to sign in. More in the
+       <a href="/claude-code">Claude Code guide</a>.</p>
   </div>
-  <div class="step">
+  <div class="step st">
     <h3>Any other MCP client</h3>
-    <p>It is a standard remote MCP server over Streamable HTTP. Point any client
-       that supports remote MCP at:</p>
-    <pre><code>${esc(mcpUrl)}</code></pre>
+    <p>It is a standard remote MCP server over Streamable HTTP. Point the client at
+       <code>${esc(mcpUrl)}</code>.</p>
   </div>
-  <div class="step">
-    <h3>What happens the first time</h3>
-    <p>Your browser opens two screens, in this order. First <strong>this server's
-       own consent page</strong>, naming the application that asked and the exact
-       address the result will be sent to — it exists so a connection request you
-       did not start is refusable. Then <strong>Google's sign-in</strong>, asking
-       for read-only Search Console access and your email address, and nothing
-       else.</p>
-    <p>Then ask: <em>&ldquo;List my Search Console properties.&rdquo;</em></p>
-  </div>`
+  <p class="note">The first time, your browser shows two screens: this server's own
+     consent page, naming the application that asked, and then Google's sign-in, asking
+     for read-only Search Console access and your email address. Then ask
+     <em class="ask">&ldquo;List my Search Console properties.&rdquo;</em></p>`
     : `<div class="step">
     <h3>This instance is not open for sign-ups</h3>
     <p>It is configured for a single operator with a shared token rather than
@@ -222,164 +221,119 @@ export function landingPage(info: SiteInfo): string {
   const repoLine = info.repoUrl
     ? `<p>The code that runs here is at
        <a href="${esc(info.repoUrl)}" rel="noopener">${esc(info.repoUrl.replace(/^https?:\/\//, ""))}</a>,
-       under Apache 2.0. You can read exactly what this service does, or run your
-       own copy with your own Google credentials — the same 32 tools, over stdio
-       or as your own hosted deployment. The <a href="/self-host">self-hosting
-       guide</a> walks through both.</p>`
+       under Apache 2.0. Read exactly what this service does, or
+       <a href="/self-host">run your own copy</a> with your own Google credentials.</p>`
     : `<p>The <a href="/self-host">self-hosting guide</a> covers running your own copy.</p>`;
 
-  // One captured answer per tool group, collapsed so the page stays scannable.
-  const examples = TOOL_GROUPS.map((g) => {
-    const ex = EXAMPLES[g.path];
-    if (!ex) return "";
-    return `<details class="example-toggle">
-    <summary>${esc(g.title)} <span class="note">&middot; <span class="tool-name">${esc(ex.tool)}</span></span></summary>
-    ${exampleFigure(ex)}
-  </details>`;
-  }).join("\n");
+  // The four questions people open with, each linked to the page that documents
+  // the tools behind it.
+  const asks: [string, string, string][] = [
+    ["What am I almost ranking for?", "Queries sitting just off page one, where a small change moves the most traffic.", "/tools/opportunities"],
+    ["Which pages lost traffic, and why?", "A diagnosis per page that separates a ranking loss from a CTR collapse or falling demand.", "/tools/diagnostics"],
+    ["Am I cannibalising myself?", "Pages competing for the same query, and which one Google actually prefers.", "/tools/diagnostics"],
+    ["How is the site doing?", "Clicks, impressions, CTR and position against the previous period, for one property or all of them.", "/tools/lookups"],
+  ];
+  const askCards = asks
+    .map(([q, what, path]) => `<div class="card lift st">
+      <h3>&ldquo;${esc(q)}&rdquo;</h3>
+      <p class="note">${esc(what)}</p>
+      <p class="go"><a class="cover" href="${esc(path)}">See the tools <span class="arw">&rarr;</span></a></p>
+    </div>`)
+    .join("\n");
 
-  const comparison = COMPARISON
-    .map(([q, a]) => `<tr><td>${esc(q)}</td><td>${a}</td></tr>`)
-    .join("");
+  const groupCards = TOOL_GROUPS
+    .map((g) => `<div class="card lift st">
+      <p class="count">${g.tools.length} tools</p>
+      <h3>${esc(g.title)}</h3>
+      <p class="note">${g.blurbHtml}</p>
+      <p class="go"><a class="cover" href="${esc(g.path)}">Parameters and a real example <span class="arw">&rarr;</span></a></p>
+    </div>`)
+    .join("\n");
+
+  const news = WHATS_NEW
+    .map((n) => `<li><span class="ver">v${esc(n.version)}</span> <span>${n.html}</span></li>`)
+    .join("\n");
 
   const body = `
 <section class="hero">
   <div class="hero-bg" aria-hidden="true"><div class="hero-grid"></div><div class="hero-glow"></div></div>
   <div class="wrap hero-inner">
-    <span class="kicker">Model Context Protocol server</span>
+    <span class="status fade" style="--d:-6"><span class="dot" aria-hidden="true"></span>MCP server &middot; v${esc(SERVER_VERSION)} &middot; read-only</span>
     ${productH1()}
-    <p class="lede">Connect Search Console to Claude and ask what your data
-       <em>means</em> — across every property in your account, in plain English,
-       without exporting a single CSV.</p>
+    <p class="lede fade" style="--d:1">Connect Search Console to Claude and ask what your data
+       <span class="mark">actually means</span>, across every property in your account,
+       in plain English, without exporting a single CSV.</p>
     ${heroCta}
-    <ul class="pill-row">
-      <li>32 tools</li>
-      <li>Read-only access</li>
-      <li>Every property, one connection</li>
-      <li>Open source</li>
-    </ul>
   </div>
 </section>
 
 <div class="wrap page-body">
+  <h2 id="what-you-can-ask">What you can ask</h2>
+  <p>You ask questions instead of reading API rows. The answer comes back as a
+     diagnosis, with the property, the parameters and the date range it was
+     computed from.</p>
+  <div class="grid grid-2">
+    ${askCards}
+  </div>
+
+  <h2 id="what-you-get">What the answer looks like</h2>
+  <p>In a client that supports MCP Apps, ten tools draw their result as cards and
+     sortable tables beside the conversation. Every other client gets the same
+     result as text, and the data Claude reads is identical either way.</p>
+  ${demoSnapshot()}
+  ${demoQuickWins()}
+  ${demoTrafficDrops()}
+  <p class="more"><a href="/tools#real-answers">Real, unedited output from the hosted instance <span class="arw">&rarr;</span></a></p>
+
   <h2 id="connecting">Connecting</h2>
   ${connect}
 
-  <h2>What you can ask</h2>
-  <p>Once connected, you ask questions instead of reading API rows. The answer
-     comes back as a diagnosis, not a spreadsheet you still have to interpret:</p>
-  <div class="grid grid-2">
-    <div class="card">
-      <h3>&ldquo;What am I almost ranking for?&rdquo;</h3>
-      <p class="note">Queries sitting just off page one, where a small change
-         moves the most traffic.</p>
-    </div>
-    <div class="card">
-      <h3>&ldquo;Which pages lost traffic, and why?&rdquo;</h3>
-      <p class="note">Traffic-drop diagnosis that separates a ranking loss from
-         lost impressions or a seasonal dip.</p>
-    </div>
-    <div class="card">
-      <h3>&ldquo;Am I cannibalising myself?&rdquo;</h3>
-      <p class="note">Pages competing for the same query, and which one Google
-         actually prefers.</p>
-    </div>
-    <div class="card">
-      <h3>&ldquo;What&rsquo;s decaying?&rdquo;</h3>
-      <p class="note">Content sliding month over month while you weren&rsquo;t
-         looking.</p>
-    </div>
+  <h2 id="tools">32 tools, grouped by job</h2>
+  <p>Each tool takes the property as a parameter, so one connection covers every
+     site in your account. Thirty run on a hosted instance; the two that write to
+     Google need a <a href="/self-host">self-hosted install</a>.</p>
+  <div class="grid grid-3">
+    ${groupCards}
   </div>
-  <p>Every answer carries provenance: which property it came from, the exact
-     parameters used, and the date range. An answer is never ambiguous about
-     which site it describes. <code>position</code> is labelled as the
-     impression-weighted average it actually is, rather than being passed off as
-     a rank-tracker position.</p>
+  <p class="more"><a href="/tools">Every tool on one page <span class="arw">&rarr;</span></a></p>
 
-  <h2 id="real-answers">Real answers</h2>
-  <p>One response per tool group, from this hosted instance against the author's
-     own site, k-o.pro. They are shown as they came back, with rows trimmed where
-     the caption says so. The <code>_meta</code> block at the top of each is the
-     provenance every answer carries.</p>
-  ${examples}
-
-  <h2>The 32 tools</h2>
-  <p>Grouped by what you would reach for them to do. Each one takes the property
-     as a parameter, so a single connection covers every site in your account.</p>
-  ${TOOL_GROUPS.map(toolTable).join("\n")}
-  <p class="note">The two indexing tools — <span class="tool-name">submit_url</span> and
-     <span class="tool-name">submit_sitemap</span> — are part of the software but
-     cannot run on this hosted instance: they need write access to your Google
-     account, which this service never requests. They work on a
-     <a href="/self-host">self-hosted install</a> configured with wider scopes.</p>
-
-  <h2>How it compares</h2>
-  <p>The questions worth asking of any Search Console MCP server, answered for
-     this one:</p>
-  <table><tr><th>Question</th><th>This server</th></tr>${comparison}</table>
-
-  <h2>Why a remote server</h2>
-  <p>Most MCP servers are local-only: one process, on one laptop, holding one
-     credential. That is why they cannot be shared, and why the claude.ai and
-     Claude Desktop connector interfaces cannot add them at all.</p>
-  <p>This one runs as a hosted service over Streamable HTTP, and implements the
-     MCP authorization spec properly — dynamic client registration, PKCE,
-     rotating tokens, and a consent screen of its own. That is what lets a
-     connector interface onboard it from nothing but a URL. It also means a team
-     shares one deployment while each person signs in as themselves and sees only
-     their own properties. Nobody copies a credential anywhere.</p>
-
-  <h2>What it reads, and what it stores</h2>
+  <h2 id="how-it-works">How it works, and what it keeps</h2>
+  ${flowDiagram()}
   <ul>
-    <li>It requests exactly one Search Console permission:
-        <code>webmasters.readonly</code> — read-only access to Search Console.
-        Signing in also uses Google's basic <code>openid</code> and
-        <code>email</code> scopes, only to identify your account. It cannot
-        change your site, submit URLs, or touch anything else in your Google
-        account.</li>
-    <li>It stores your email address, your Google account identifier, and an
-        encrypted Google refresh token, so it can answer your requests without
-        asking you to sign in every time.</li>
-    <li>It does not store your Search Console data. Results are fetched live for
-        each question and passed straight back to your Claude client.</li>
-    <li>Your refresh token is encrypted with AES-256-GCM under a key held outside
-        the database. Tokens issued to your client are stored only as hashes,
-        expire after an hour, and rotate on refresh.</li>
+    <li>It requests exactly one Search Console permission,
+        <code>webmasters.readonly</code>, plus Google's basic <code>openid</code> and
+        <code>email</code> scopes, only to identify your account. It cannot change
+        your site, submit URLs, or touch anything else in your Google account.</li>
+    <li>It stores your email address, your Google account identifier and an
+        encrypted Google refresh token. It does not store your Search Console
+        data: results are fetched live for each question and passed straight back.</li>
+    <li>Ask Claude to run <code>export_my_data</code> to see everything held about
+        you, or <code>disconnect_account</code> to erase it.</li>
   </ul>
-  <p>Ask your Claude client to run <code>export_my_data</code> to see everything
-     held about you, or <code>disconnect_account</code> to erase it. The full
-     detail is in the <a href="/privacy">privacy policy</a>.</p>
+  <p class="more"><a href="/privacy">The privacy policy <span class="arw">&rarr;</span></a>
+     &nbsp; <a href="/compare">How it compares <span class="arw">&rarr;</span></a>
+     &nbsp; <a href="/faq">Questions <span class="arw">&rarr;</span></a></p>
 
-  <h2>Running your own</h2>
+  <h2 id="open-source">Open source, and still moving</h2>
   ${repoLine}
-
-  <h2>Who builds it</h2>
+  <ul class="news st">
+    ${news}
+  </ul>
   ${aboutBlock()}
-
-  <h2>Questions</h2>
-  ${FAQ.map(([q, a]) => `<div class="faq"><h3>${esc(q)}</h3><p>${a}</p></div>`).join("\n")}
 </div>`;
 
   const description =
     "Connect Google Search Console to Claude by URL: 32 tools for quick wins, " +
     "traffic drops and AI Mode queries across every property. Read-only, free.";
 
-  const jsonLd: unknown[] = [
-    softwareJsonLd(base, info, description),
-    {
-      "@context": "https://schema.org",
-      "@type": "FAQPage",
-      mainEntity: FAQ.map(([q, a]) => ({
-        "@type": "Question",
-        name: q,
-        acceptedAnswer: {
-          "@type": "Answer",
-          // Schema.org answers are plain prose; strip the inline markup.
-          text: a.replace(/<[^>]+>/g, ""),
-        },
-      })),
-    },
-  ];
+  // The FAQ and its FAQPage markup live on /faq now, with the questions.
+  const website = {
+    "@context": "https://schema.org",
+    "@type": "WebSite",
+    name: PRODUCT_NAME,
+    ...(base ? { url: `${base}/` } : {}),
+  };
+  const jsonLd: unknown[] = [softwareJsonLd(base, info, description), website];
 
   return shell({
     title: PRODUCT_NAME,

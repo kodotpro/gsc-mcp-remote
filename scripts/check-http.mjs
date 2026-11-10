@@ -271,6 +271,19 @@ try {
   // so nothing outside dist/fonts is reachable through this route.
   const strayFont = await fetch(`${BASE}/fonts/not-a-font.woff2`);
   check("an unknown font name is refused", strayFont.status === 404, `got ${strayFont.status}`);
+  const card = await fetch(`${BASE}/img/og-card-v2.png`);
+  check("the redrawn social card is served, and the old one still is for links already shared",
+    card.status === 200 && card.headers.get("content-type") === "image/png" && (await fetch(`${BASE}/img/og-card-v1.png`)).status === 200);
+  // The MCP Apps view runs in a client's sandboxed iframe (an opaque origin)
+  // and fonts are always fetched in CORS mode, so without this header the view
+  // on a hosted deployment silently falls back to the system font.
+  const viewFont = await fetch(`${BASE}/fonts/host-grotesk-latin.woff2`);
+  check("the MCP Apps view's font is served, and readable from any origin",
+    viewFont.status === 200 && viewFont.headers.get("access-control-allow-origin") === "*" && viewFont.headers.get("content-type") === "font/woff2",
+    `${viewFont.status} ${viewFont.headers.get("access-control-allow-origin")}`);
+  const pageImage = await fetch(`${BASE}/img/k-o-pro.png`);
+  check("...and that header is on the fonts only, not on the rest of the site",
+    pageImage.headers.get("access-control-allow-origin") === null && (await fetch(`${BASE}/healthz`)).headers.get("access-control-allow-origin") === null);
 
   // Same reasoning for the images the pages reference — the wordmark travels
   // through the same build-copy step the fonts do.
@@ -339,8 +352,17 @@ try {
   } catch (err) {
     check("every JSON-LD block parses as JSON", false, err.message);
   }
-  check("structured data describes the software and the FAQ",
-    ldTypes.includes("SoftwareApplication") && ldTypes.includes("FAQPage"), ldTypes.join(","));
+  check("structured data describes the software and the site",
+    ldTypes.includes("SoftwareApplication") && ldTypes.includes("WebSite"), ldTypes.join(","));
+  // The questions moved to their own page, and their markup moved with them:
+  // FAQPage belongs on the page that shows the FAQ.
+  const faqBody = await (await fetch(`${BASE}/faq`)).text();
+  const faqLd = [...faqBody.matchAll(/<script type="application\/ld\+json">([\s\S]*?)<\/script>/g)].map((m) => JSON.parse(m[1]));
+  const faqPage = faqLd.find((d) => d["@type"] === "FAQPage");
+  check("/faq carries FAQPage markup with one entry per question shown",
+    faqPage?.mainEntity?.length === (faqBody.match(/class="faq/g) ?? []).length && faqPage.mainEntity.length >= 8,
+    `${faqPage?.mainEntity?.length} entries`);
+  check("the landing page no longer claims a FAQ it does not show", !ldTypes.includes("FAQPage"));
   // No `</script>` may survive into the block, or the element closes early.
   check("structured data cannot break out of its element",
     !ldBlocks.some((b) => b.toLowerCase().includes("</script")));
@@ -392,6 +414,79 @@ try {
   check("the structured data carries the running version", software.softwareVersion === health.version,
     `${software.softwareVersion} vs ${health.version}`);
   check("the structured data URL matches the canonical", software.url === "https://gsc.example.com/", software.url);
+
+  // -- the landing page stays a landing page ------------------------------------
+  // It had grown to ten sections, six tables and about 2,800 words, with the full
+  // tool reference, the comparison and the FAQ on it. Those live on /tools,
+  // /compare and /faq now; these ceilings keep them from drifting back.
+  {
+    const main = rootBody.slice(rootBody.indexOf("<main>"), rootBody.indexOf("</main>"));
+    const words = main.replace(/<style[\s\S]*?<\/style>/g, "").replace(/<[^>]+>/g, " ").split(/\s+/).filter(Boolean).length;
+    check("the landing page is under 1,400 words", words < 1400, `${words} words`);
+    check("...has at most six sections", (main.match(/<h2[\s>]/g) ?? []).length <= 6, `${(main.match(/<h2[\s>]/g) ?? []).length} h2`);
+    check("...and shows what a result looks like before how to connect",
+      main.indexOf('id="what-you-get"') > 0 && main.indexOf('id="what-you-get"') < main.indexOf('id="connecting"'));
+    for (const path of ["/tools", "/compare", "/faq", "/privacy"]) {
+      check(`the landing page links to ${path}`, main.includes(`href="${path}`));
+    }
+  }
+
+  // -- illustrations are labelled as illustrations --------------------------------
+  // Everything else on these pages that looks like output is real and dated.
+  // The view mock-ups are not, so each one must say so where it is shown.
+  for (const path of ["/", "/tools"]) {
+    const body = path === "/" ? rootBody : await (await fetch(`${BASE}${path}`)).text();
+    const figures = body.match(/<figure class="demo[\s\S]*?<\/figure>/g) ?? [];
+    check(`${path} shows view illustrations`, figures.length >= 2, `${figures.length}`);
+    check(`${path}: every illustration says it is sample data and uses example.com`,
+      figures.every((f) => /Sample data/.test(f) && /example\.com/.test(f) && !/k-o\.pro/.test(f)));
+  }
+  {
+    const toolsBody = await (await fetch(`${BASE}/tools`)).text();
+    const { VIEW_TOOLS } = await import("../dist/apps.js");
+    const section = toolsBody.slice(toolsBody.indexOf('id="interactive-views"'), toolsBody.indexOf('id="results"'));
+    check("/tools names every tool that has a view, and no other, in that section's table",
+      [...VIEW_TOOLS].every((t) => section.includes(`<span class="tool-name">${t}</span></td>`)) &&
+      (section.match(/<tr><td><span class="tool-name">/g) ?? []).length === VIEW_TOOLS.size);
+    check("/tools says how many tools have a view, from the code", section.includes(`${VIEW_TOOLS.size} tools come with a view`));
+    const diag = await (await fetch(`${BASE}/tools/diagnostics`)).text();
+    check("a tool's own page marks it when it has a view", /id="traffic_drops"[\s\S]{0,900}Interactive view/.test(diag) && !/id="list_properties"[\s\S]{0,600}Interactive view/.test(await (await fetch(`${BASE}/ai-mode-queries`)).text()));
+  }
+
+  // -- motion ----------------------------------------------------------------------
+  // k-o.pro's animations, in CSS only. Two properties matter more than how they
+  // look: nothing may be left invisible for someone who asked for less motion or
+  // whose browser lacks scroll-driven animation, and the values are k-o.pro's.
+  {
+    const css = rootBody.match(/<style>([\s\S]*?)<\/style>/)[1];
+    const start = css.indexOf("@media (prefers-reduced-motion:no-preference){");
+    let depth = 0, end = start;
+    for (let i = css.indexOf("{", start); i < css.length; i++) {
+      if (css[i] === "{") depth++;
+      else if (css[i] === "}" && --depth === 0) { end = i + 1; break; }
+    }
+    const inside = css.slice(start, end);
+    const outside = css.slice(0, start) + css.slice(end);
+    check("the motion rules exist", start > 0 && /@keyframes hw/.test(inside) && /@keyframes st/.test(inside));
+    check("nothing outside the no-preference block hides or animates content",
+      !/opacity:0/.test(outside) && !/@keyframes/.test(outside) && !/[^-]animation:/.test(outside) && !/filter:blur/.test(outside.replace(/backdrop-filter:blur/g, "")),
+      (outside.match(/opacity:0|@keyframes \w+|[^-]animation:[^;}]+/g) ?? []).join(" | "));
+    check("the scroll reveal is behind @supports, so a browser without it shows the content",
+      /@supports \(animation-timeline:view\(\)\)\{[^@]*\.st\{/.test(inside) && !/\.st\{[^}]*opacity:0/.test(inside.replace(/@supports[\s\S]*$/, "")));
+    for (const [what, rule] of [
+      ["headline words", ".95s cubic-bezier(.2,.7,.2,1) both hw"],
+      ["the 42ms stagger", "calc(var(--i,0) * 42ms + .12s)"],
+      ["the underline draw", "1.1s cubic-bezier(.2,.7,.2,1) 1.15s forwards mark"],
+      ["the hero fade", ".9s cubic-bezier(.2,.7,.2,1) both fade"],
+      ["the status ping", "2.4s ease-out infinite ping"],
+      ["the reveal's start state", "0%{opacity:0;filter:blur(6px);transform:translateY(32px)}"],
+    ]) check(`${what} use k-o.pro's own timing`, css.includes(rule), rule);
+    check("the card lift and the link underline match k-o.pro's hover",
+      css.includes(".lift:hover{transform:translateY(-4px);box-shadow:0 28px 56px -32px #14141261}") && css.includes("background-size .5s cubic-bezier(.2,.7,.2,1)"));
+    check("the headline is still ordinary words: one span per word, spaces between them",
+      /<h1><span class="hw" style="--i:0">Google<\/span> <span class="hw" style="--i:1">Search<\/span> /.test(rootBody));
+    check("pages still carry no script except data blocks", !/<script(?! type="application\/ld\+json")/.test(rootBody));
+  }
 
   // -- the public-page registry ------------------------------------------------
   // One registry feeds the routes, the sitemap and /llms.txt. These checks are

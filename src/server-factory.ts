@@ -14,6 +14,8 @@ import { z } from "zod";
 
 import { SERVER_INSTRUCTIONS, withMeta } from "./guardrails.js";
 import { explainGoogleError } from "./google-errors.js";
+import { outputShapeFor } from "./output-schemas.js";
+import { APP_MIME_TYPE, VIEW_URI, viewHtml, viewResourceMeta, viewToolMeta } from "./apps.js";
 import { quickWins } from "./tools/quick-wins.js";
 import { ctrOpportunities } from "./tools/ctr-opportunities.js";
 import { trafficDrops } from "./tools/traffic-drops.js";
@@ -95,7 +97,27 @@ export function createServer(): McpServer {
   );
 
   registerTools(server);
+  registerView(server);
   return server;
+}
+
+/**
+ * The MCP Apps view (see apps.ts): one HTML resource that clients supporting
+ * the extension render beside the results of the tools that name it.
+ */
+function registerView(server: McpServer): void {
+  const meta = viewResourceMeta();
+  server.registerResource(
+    "search-console-view",
+    VIEW_URI,
+    {
+      title: "Search Console view",
+      description: "Interactive cards and tables for Search Console tool results (MCP Apps).",
+      mimeType: APP_MIME_TYPE,
+      _meta: meta,
+    },
+    async () => ({ contents: [{ uri: VIEW_URI, mimeType: APP_MIME_TYPE, text: viewHtml(), _meta: meta }] })
+  );
 }
 
 /** Shape of a Search Console property: a domain property or a URL-prefix property. */
@@ -152,6 +174,23 @@ function annotationsFor(name: string): ToolAnnotations {
   }
 }
 
+/**
+ * A result in both forms: the JSON text every client can read, and the same
+ * object as `structuredContent` for clients that take typed results.
+ *
+ * The object is parsed back from the text rather than passed through, so the
+ * two can never disagree: what JSON drops (undefined) or changes (NaN to null)
+ * is dropped or changed in both, and the output schemas describe what actually
+ * goes over the wire.
+ */
+function structured(wrapped: { _meta: unknown; data: unknown }) {
+  const text = JSON.stringify(wrapped);
+  return {
+    content: [{ type: "text" as const, text }],
+    structuredContent: JSON.parse(text) as Record<string, unknown>,
+  };
+}
+
 function registerTools(server: McpServer): void {
   // Every registration goes through here so none can ship without annotations.
   const tool = <Args extends ZodRawShapeCompat>(
@@ -159,8 +198,19 @@ function registerTools(server: McpServer): void {
     description: string,
     shape: Args,
     cb: ToolCallback<Args>
-  ) =>
-    server.tool(name, description, shape, annotationsFor(name), (async (args: Record<string, unknown>, extra: unknown) => {
+  ) => {
+    const viewMeta = viewToolMeta(name);
+    const outputSchema = outputShapeFor(name);
+    return server.registerTool(
+      name,
+      {
+        description,
+        inputSchema: shape,
+        annotations: annotationsFor(name),
+        ...(outputSchema ? { outputSchema } : {}),
+        ...(viewMeta ? { _meta: viewMeta } : {}),
+      },
+      (async (args: Record<string, unknown>, extra: unknown) => {
       try {
         return await (cb as (a: unknown, e: unknown) => Promise<unknown>)(args, extra);
       } catch (err) {
@@ -172,7 +222,9 @@ function registerTools(server: McpServer): void {
         if (!explained) throw err;
         return { isError: true, content: [{ type: "text", text: explained }] };
       }
-    }) as unknown as ToolCallback<Args>);
+    }) as unknown as ToolCallback<Args>
+    );
+  };
 
   // 1. Quick Wins
   tool(
@@ -188,9 +240,7 @@ function registerTools(server: McpServer): void {
       const property = resolveSiteUrl(site_url);
       const results = await quickWins(days, min_impressions, max_position, property);
       const wrapped = withMeta(results, "quick_wins", { days, min_impressions, max_position, site_url: property });
-      return {
-        content: [{ type: "text", text: JSON.stringify(wrapped) }],
-      };
+      return structured(wrapped);
     }
   );
 
@@ -207,9 +257,7 @@ function registerTools(server: McpServer): void {
       const property = resolveSiteUrl(site_url);
       const results = await ctrOpportunities(days, min_impressions, property);
       const wrapped = withMeta(results, "ctr_opportunities", { days, min_impressions, site_url: property });
-      return {
-        content: [{ type: "text", text: JSON.stringify(wrapped) }],
-      };
+      return structured(wrapped);
     }
   );
 
@@ -225,9 +273,7 @@ function registerTools(server: McpServer): void {
       const property = resolveSiteUrl(site_url);
       const results = await trafficDrops(days, property);
       const wrapped = withMeta(results, "traffic_drops", { days, site_url: property });
-      return {
-        content: [{ type: "text", text: JSON.stringify(wrapped) }],
-      };
+      return structured(wrapped);
     }
   );
 
@@ -245,9 +291,7 @@ function registerTools(server: McpServer): void {
       const property = resolveSiteUrl(site_url);
       const results = await contentGaps(days, min_impressions, min_position, property);
       const wrapped = withMeta(results, "content_gaps", { days, min_impressions, min_position, site_url: property });
-      return {
-        content: [{ type: "text", text: JSON.stringify(wrapped) }],
-      };
+      return structured(wrapped);
     }
   );
 
@@ -263,9 +307,7 @@ function registerTools(server: McpServer): void {
       const property = resolveSiteUrl(site_url);
       const results = await siteSnapshot(days, property);
       const wrapped = withMeta(results, "site_snapshot", { days, site_url: property });
-      return {
-        content: [{ type: "text", text: JSON.stringify(wrapped) }],
-      };
+      return structured(wrapped);
     }
   );
 
@@ -281,9 +323,7 @@ function registerTools(server: McpServer): void {
       const property = resolveSiteUrl(site_url);
       const results = await inspectUrlTool(url, property);
       const wrapped = withMeta(results, "inspect_url", { url, site_url: property });
-      return {
-        content: [{ type: "text", text: JSON.stringify(wrapped) }],
-      };
+      return structured(wrapped);
     }
   );
 
@@ -300,9 +340,7 @@ function registerTools(server: McpServer): void {
       const property = resolveSiteUrl(site_url);
       const results = await cannibalizationCheck(days, min_impressions, property);
       const wrapped = withMeta(results, "cannibalization_check", { days, min_impressions, site_url: property });
-      return {
-        content: [{ type: "text", text: JSON.stringify(wrapped) }],
-      };
+      return structured(wrapped);
     }
   );
 
@@ -317,9 +355,7 @@ function registerTools(server: McpServer): void {
       const property = resolveSiteUrl(site_url);
       const results = await contentDecay(property);
       const wrapped = withMeta(results, "content_decay", { site_url: property });
-      return {
-        content: [{ type: "text", text: JSON.stringify(wrapped) }],
-      };
+      return structured(wrapped);
     }
   );
 
@@ -336,9 +372,7 @@ function registerTools(server: McpServer): void {
       const property = resolveSiteUrl(site_url);
       const results = await topicClusterPerformance(path_pattern, days, property);
       const wrapped = withMeta(results, "topic_cluster_performance", { path_pattern, days, site_url: property });
-      return {
-        content: [{ type: "text", text: JSON.stringify(wrapped) }],
-      };
+      return structured(wrapped);
     }
   );
 
@@ -355,9 +389,7 @@ function registerTools(server: McpServer): void {
       const property = resolveSiteUrl(site_url);
       const results = await ctrVsBenchmark(days, min_impressions, property);
       const wrapped = withMeta(results, "ctr_vs_benchmark", { days, min_impressions, site_url: property });
-      return {
-        content: [{ type: "text", text: JSON.stringify(wrapped) }],
-      };
+      return structured(wrapped);
     }
   );
 
@@ -403,9 +435,7 @@ function registerTools(server: McpServer): void {
     async ({ days, dimensions, filters, row_limit, order_by, order_direction, site_url, search_type }) => {
       const results = await advancedSearchAnalytics(days, dimensions, filters, row_limit, order_by, order_direction, site_url, search_type);
       const wrapped = withMeta(results, "advanced_search_analytics", { days, dimensions, filters, row_limit, order_by, search_type });
-      return {
-        content: [{ type: "text", text: JSON.stringify(wrapped) }],
-      };
+      return structured(wrapped);
     }
   );
 
@@ -424,9 +454,7 @@ function registerTools(server: McpServer): void {
       const property = resolveSiteUrl(site_url);
       const results = await checkAlerts(days, position_drop_threshold, ctr_drop_threshold, click_drop_threshold, property);
       const wrapped = withMeta(results, "check_alerts", { days, position_drop_threshold, ctr_drop_threshold, click_drop_threshold, site_url: property });
-      return {
-        content: [{ type: "text", text: JSON.stringify(wrapped) }],
-      };
+      return structured(wrapped);
     }
   );
 
@@ -443,9 +471,7 @@ function registerTools(server: McpServer): void {
       const property = resolveSiteUrl(site_url);
       const results = await contentRecommendations(days, max_recommendations, property);
       const wrapped = withMeta(results, "content_recommendations", { days, max_recommendations, site_url: property });
-      return {
-        content: [{ type: "text", text: JSON.stringify(wrapped) }],
-      };
+      return structured(wrapped);
     }
   );
 
@@ -478,9 +504,7 @@ function registerTools(server: McpServer): void {
     async ({ site_urls, days }) => {
       const results = await multiSiteDashboard(site_urls, days);
       const wrapped = withMeta(results, "multi_site_dashboard", { site_urls, days });
-      return {
-        content: [{ type: "text", text: JSON.stringify(wrapped) }],
-      };
+      return structured(wrapped);
     }
   );
 
@@ -528,9 +552,7 @@ function registerTools(server: McpServer): void {
       const property = resolveSiteUrl(site_url);
       const results = await listSitemaps(property);
       const wrapped = withMeta(results, "list_sitemaps", { site_url: property });
-      return {
-        content: [{ type: "text", text: JSON.stringify(wrapped) }],
-      };
+      return structured(wrapped);
     }
   );
 
@@ -548,9 +570,7 @@ function registerTools(server: McpServer): void {
         "Google Search Console API (sites.list, live data)",
         "This is the definitive list of properties the authenticated credential can access. Use these exact siteUrl strings as the site_url parameter on other tools; do not guess or reformat them. A property with canAnalyse false cannot return Search Analytics data."
       );
-      return {
-        content: [{ type: "text", text: JSON.stringify(wrapped) }],
-      };
+      return structured(wrapped);
     }
   );
 
@@ -688,7 +708,7 @@ function registerTools(server: McpServer): void {
         "This server's own user database",
         "This is the complete set of fields stored about the signed-in user. The encrypted Google refresh token is deliberately excluded."
       );
-      return { content: [{ type: "text", text: JSON.stringify(wrapped) }] };
+      return structured(wrapped);
     }
   );
 
@@ -715,9 +735,7 @@ function registerTools(server: McpServer): void {
     async ({ days, min_impressions, row_limit, order_by, site_url }) => {
       const results = await imageKeywordOverview(days, min_impressions, row_limit, order_by, site_url);
       const wrapped = withMeta(results, "image_keyword_overview", { days, min_impressions, row_limit, order_by, site_url });
-      return {
-        content: [{ type: "text", text: JSON.stringify(wrapped) }],
-      };
+      return structured(wrapped);
     }
   );
 
@@ -734,9 +752,7 @@ function registerTools(server: McpServer): void {
     async ({ days, min_impressions, max_position, site_url }) => {
       const results = await imageSearchQuickWins(days, min_impressions, max_position, site_url);
       const wrapped = withMeta(results, "image_search_quick_wins", { days, min_impressions, max_position, site_url });
-      return {
-        content: [{ type: "text", text: JSON.stringify(wrapped) }],
-      };
+      return structured(wrapped);
     }
   );
 
@@ -753,9 +769,7 @@ function registerTools(server: McpServer): void {
     async ({ days, min_combined_impressions, row_limit, site_url }) => {
       const results = await compareWebVsImage(days, min_combined_impressions, row_limit, site_url);
       const wrapped = withMeta(results, "compare_web_vs_image", { days, min_combined_impressions, row_limit, site_url });
-      return {
-        content: [{ type: "text", text: JSON.stringify(wrapped) }],
-      };
+      return structured(wrapped);
     }
   );
 
@@ -773,9 +787,7 @@ function registerTools(server: McpServer): void {
     async ({ days, min_impressions, row_limit, order_by, site_url }) => {
       const results = await imagePagesOverview(days, min_impressions, row_limit, order_by, site_url);
       const wrapped = withMeta(results, "image_pages_overview", { days, min_impressions, row_limit, order_by, site_url });
-      return {
-        content: [{ type: "text", text: JSON.stringify(wrapped) }],
-      };
+      return structured(wrapped);
     }
   );
 
@@ -793,9 +805,7 @@ function registerTools(server: McpServer): void {
     async ({ days, min_combined_impressions, row_limit, order_by, site_url }) => {
       const results = await imageKeywordTrends(days, min_combined_impressions, row_limit, order_by, site_url);
       const wrapped = withMeta(results, "image_keyword_trends", { days, min_combined_impressions, row_limit, order_by, site_url });
-      return {
-        content: [{ type: "text", text: JSON.stringify(wrapped) }],
-      };
+      return structured(wrapped);
     }
   );
 
@@ -813,9 +823,7 @@ function registerTools(server: McpServer): void {
     async ({ days, min_impressions, max_clicks, row_limit, site_url }) => {
       const results = await imageImpressionsNoClicks(days, min_impressions, max_clicks, row_limit, site_url);
       const wrapped = withMeta(results, "image_impressions_no_clicks", { days, min_impressions, max_clicks, row_limit, site_url });
-      return {
-        content: [{ type: "text", text: JSON.stringify(wrapped) }],
-      };
+      return structured(wrapped);
     }
   );
 
@@ -830,9 +838,7 @@ function registerTools(server: McpServer): void {
     async ({ min_period3_clicks, site_url }) => {
       const results = await imageContentDecay(min_period3_clicks, site_url);
       const wrapped = withMeta(results, "image_content_decay", { min_period3_clicks, site_url });
-      return {
-        content: [{ type: "text", text: JSON.stringify(wrapped) }],
-      };
+      return structured(wrapped);
     }
   );
 
@@ -850,9 +856,7 @@ function registerTools(server: McpServer): void {
     async ({ days, min_impressions, max_rows_per_bucket, include_timeline, site_url }) => {
       const results = await genaiConversationQueries(days, min_impressions, max_rows_per_bucket, include_timeline, site_url);
       const wrapped = withMeta(results, "genai_conversation_queries", { days, min_impressions, max_rows_per_bucket, include_timeline, site_url });
-      return {
-        content: [{ type: "text", text: JSON.stringify(wrapped) }],
-      };
+      return structured(wrapped);
     }
   );
 
@@ -878,9 +882,7 @@ function registerTools(server: McpServer): void {
         "Live fetch of the audited pages (the user's own site)",
         "All findings come from fetching and parsing the listed pages and image files at call time. Alt text, attributes, bytes, and dimensions are read values, not estimates. Base your analysis only on this data. An empty alt (alt=\"\") is correct for decorative images; do not report it as a defect."
       );
-      return {
-        content: [{ type: "text", text: JSON.stringify(wrapped) }],
-      };
+      return structured(wrapped);
     }
   );
 }

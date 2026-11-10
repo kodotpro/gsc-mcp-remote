@@ -11,15 +11,17 @@
  */
 
 import {
-  ALL_TOOL_NAMES, AUTHOR, EXAMPLES, GUIDES, PRODUCT_NAME, PROPERTY_INDEPENDENT, README_URL, SELF_HOSTING_DOC_URL,
+  ALL_TOOL_NAMES, AUTHOR, COMPARISON, EXAMPLES, FAQ, GUIDES, PRODUCT_NAME, PROPERTY_INDEPENDENT, README_URL, SELF_HOSTING_DOC_URL,
   SERVER_VERSION, SITE_UPDATED, SITE_URL_NOTE, TOOL_GROUPS, UPSTREAM, WRITE_TOOLS, humanDate, type ToolDoc, type ToolGroup,
 } from "./site-content.js";
 import { breadcrumbJsonLd, canonicalBase, crumbs, esc, markdownPathFor, shell, type Crumb } from "./web-theme.js";
 import { htmlToMarkdown } from "./markdown.js";
 import {
-  SPARK, aboutBlock, authorJsonLd, claudeInstallUrl, exampleFigure, landingPage, privacyPage,
+  SPARK, aboutBlock, authorJsonLd, claudeInstallUrl, exampleFigure, landingPage, privacyPage, toolTable,
   type SiteInfo,
 } from "./web-pages.js";
+import { VIEW_TOOLS } from "./apps.js";
+import { demoAlerts, demoQuickWins } from "./web-demos.js";
 
 interface GuideOptions {
   info: SiteInfo;
@@ -33,6 +35,8 @@ interface GuideOptions {
   /** Trail between Overview and this page, usually empty. */
   trail?: Crumb[];
   bodyHtml: string;
+  /** Structured data beyond the article, author and breadcrumb every guide carries. */
+  extraJsonLd?: unknown[];
 }
 
 const OVERVIEW: Crumb = { label: "Overview", path: "/" };
@@ -96,7 +100,7 @@ ${o.bodyHtml}
     contactEmail: o.info.contactEmail,
     canonical: base ? `${base}${o.path}` : undefined,
     markdownPath: markdownPathFor(o.path),
-    jsonLd: [article, author, ...breadcrumbJsonLd(trail, base, o.path)],
+    jsonLd: [article, author, ...breadcrumbJsonLd(trail, base, o.path), ...(o.extraJsonLd ?? [])],
   });
 }
 
@@ -354,7 +358,9 @@ function paramsTable(tool: ToolDoc): string {
 function toolBlock(t: ToolDoc): string {
   return `<div class="tool-block" id="${esc(t.name)}">
     <h3><span class="tool-name">${esc(t.name)}</span></h3>
-    <p>${t.detailHtml}</p>
+    <p>${t.detailHtml}</p>${VIEW_TOOLS.has(t.name) ? `
+    <p class="note"><span class="tag ok">Interactive view</span> In a client that supports MCP Apps this
+       result is also drawn as cards or a sortable table. <a href="/tools#interactive-views">How that works</a>.</p>` : ""}
     <p>Ask: <em class="ask">&ldquo;${esc(t.ask)}&rdquo;</em></p>
     ${paramsTable(t)}
   </div>`;
@@ -563,6 +569,180 @@ npm ci && npm run build</code></pre></li>
   });
 }
 
+// -- every tool on one page -----------------------------------------------------
+
+function toolsPage(info: SiteInfo): string {
+  const withView = TOOL_GROUPS.flatMap((g) => g.tools).filter((t) => VIEW_TOOLS.has(t.name));
+  // One captured answer per tool group, collapsed so the page stays scannable.
+  const examples = TOOL_GROUPS.map((g) => {
+    const ex = EXAMPLES[g.path];
+    if (!ex) return "";
+    return `<details class="example-toggle">
+    <summary>${esc(g.title)} <span class="note">&middot; <span class="tool-name">${esc(ex.tool)}</span></span></summary>
+    ${exampleFigure(ex)}
+  </details>`;
+  }).join("\n");
+
+  const bodyHtml = `
+  <h2>The tools, by job</h2>
+  <p class="note">${SITE_URL_NOTE}</p>
+  ${TOOL_GROUPS.map(toolTable).join("\n")}
+  <p class="note">The two indexing tools, ${WRITE_TOOLS.map((t) => `<span class="tool-name">${esc(t)}</span>`).join(" and ")},
+     are part of the software but cannot run on this hosted instance: they need write
+     access to your Google account, which this service never requests. They work on a
+     <a href="/self-host">self-hosted install</a> configured with wider scopes.
+     <span class="tool-name">submit_url</span> takes one URL or up to 200.</p>
+
+  <h2 id="interactive-views">Interactive views</h2>
+  <p>${withView.length} tools come with a view: in a client that supports the MCP Apps
+     extension, the result is drawn as cards and sortable tables beside the
+     conversation. A client without it shows the same result as text. Either way
+     Claude reads the same data, so the analysis does not depend on the view.</p>
+  ${demoQuickWins()}
+  ${demoAlerts()}
+  <table>
+    <tr><th>Tool</th><th>What the view shows</th></tr>
+    ${withView.map((t) => `<tr><td><span class="tool-name">${esc(t.name)}</span></td><td>${esc(t.what)}</td></tr>`).join("\n    ")}
+  </table>
+  <p class="note">The view is one small page that runs in the client's sandbox. It
+     loads nothing from the network except one font from this site, follows no
+     links, and treats every query and URL in a result as text, never as markup.
+     Only tools that read have a view.</p>
+
+  <h2 id="results">What every result carries</h2>
+  <ul>
+    <li><strong>Provenance.</strong> A <code>_meta</code> block names the source, the
+        tool, the exact parameters and the property the numbers came from.</li>
+    <li><strong>A typed copy.</strong> The same result is returned as structured content
+        as well as JSON text, and the ten tools with a view declare its shape in
+        advance, so a client can rely on the fields.</li>
+    <li><strong>A warning about borrowed text.</strong> Search queries and page URLs are
+        written by other people. Each result says so, and tells the model never to
+        follow instructions found inside them.</li>
+    <li><strong>Position, labelled honestly.</strong> It is the impression-weighted
+        average Search Console reports, not a rank-tracker position.</li>
+  </ul>
+
+  <h2 id="limits">Limits and errors</h2>
+  <table>
+    <tr><th>What</th><th>Behaviour</th></tr>
+    <tr><td>Date range</td><td><code>days</code> is 1 to 480, the 16 months Search Console keeps. A value outside it is refused before any call to Google.</td></tr>
+    <tr><td>Rows returned</td><td>Tools return their top rows (usually 50). <span class="tool-name">advanced_search_analytics</span> takes <code>row_limit</code> up to 500.</td></tr>
+    <tr><td>Requests</td><td>60 a minute per person by default; a batch counts once per message in it. Over the limit the server answers <code>429</code> and says when to retry.</td></tr>
+    <tr><td>Google's failures</td><td>A read that Google answers with a rate-limit or server error is retried twice. Writes and timeouts are never retried.</td></tr>
+    <tr><td>Error messages</td><td>Plain words and a next step: no access to that property (ask for <span class="tool-name">list_properties</span>), quota reached (wait), sign-in revoked (reconnect), or Google's own outage.</td></tr>
+    <tr><td>Erasing your account</td><td><span class="tool-name">disconnect_account</span> takes two calls: the first explains what will be erased, the second confirms it.</td></tr>
+  </table>
+
+  <h2 id="real-answers">Real answers</h2>
+  <p>One response per tool group, from this hosted instance against the author's
+     own site, k-o.pro, on the date in each caption. They are shown as they came
+     back, indented for reading, with rows trimmed where the caption says so.
+     Results today also carry the borrowed-text warning described above, which
+     was added after these were captured.</p>
+  ${examples}
+
+  <h2>Connect it</h2>
+  <p>Add <code>${esc(info.publicUrl)}/mcp</code> to <a href="/claude">claude.ai or Claude
+     Desktop</a> or to <a href="/claude-code">Claude Code</a>, sign in with Google, and ask.</p>`;
+
+  return guidePage({
+    info,
+    path: "/tools",
+    title: "All 32 Google Search Console MCP tools, with views, limits and real output",
+    description: "Every tool in the Search Console MCP server on one page: what each does, " +
+      "which draw an interactive view, input limits, error behaviour and real output.",
+    kicker: "Reference",
+    h1: "All 32 tools",
+    ledeHtml: "What each tool does, grouped by the job you would reach for it to do, " +
+      "followed by how results are shown, what they carry, where the limits are, and " +
+      "real output from the hosted instance.",
+    bodyHtml,
+  });
+}
+
+// -- comparison -----------------------------------------------------------------
+
+function comparePage(info: SiteInfo): string {
+  const rows = COMPARISON.map(([q, a]) => `<tr><td>${esc(q)}</td><td>${a}</td></tr>`).join("");
+  const bodyHtml = `
+  <h2>The questions worth asking</h2>
+  <p>Ask these of any Search Console MCP server. Other servers are not named here:
+     their specifications change, and a table about them would be stale or
+     unverified. These are the answers for this one.</p>
+  <table><tr><th>Question</th><th>This server</th></tr>${rows}</table>
+
+  <h2>Why a remote server</h2>
+  <p>Most MCP servers are local-only: one process, on one laptop, holding one
+     credential. That is why they cannot be shared, and why the claude.ai and
+     Claude Desktop connector interfaces cannot add them at all.</p>
+  <p>This one runs as a hosted service over Streamable HTTP and implements the
+     MCP authorization spec: dynamic client registration, PKCE, rotating tokens,
+     and a consent screen of its own. That is what lets a connector interface
+     add it from nothing but a URL. It also means a team shares one deployment
+     while each person signs in as themselves and sees only their own
+     properties. Nobody copies a credential anywhere.</p>
+
+  <h2>Hosted, or your own</h2>
+  <table>
+    <tr><th></th><th>Hosted at <code>${esc(info.publicUrl.replace(/^https?:\/\//, ""))}</code></th><th>Your own copy</th></tr>
+    <tr><td>Setup</td><td>Add a URL, sign in with Google</td><td>Clone, build, bring a Google OAuth client</td></tr>
+    <tr><td>Where the Google token lives</td><td>On this server, encrypted</td><td>On your machine or your server</td></tr>
+    <tr><td>Access to Google</td><td>Read-only</td><td>Read-only, or full if you choose</td></tr>
+    <tr><td>Indexing tools</td><td>Not available</td><td>Available with full access</td></tr>
+  </table>
+  <p>The <a href="/self-host">self-hosting guide</a> covers the second column.</p>`;
+
+  return guidePage({
+    info,
+    path: "/compare",
+    title: "How this Google Search Console MCP server compares",
+    description: "The questions worth asking of any Search Console MCP server (setup, " +
+      "clients, properties, permissions, data storage, coverage, price), answered for this one.",
+    kicker: "Comparison",
+    h1: "How it compares",
+    ledeHtml: "What to ask of any Search Console MCP server before you connect it to your " +
+      "account, and the answers for this one.",
+    bodyHtml,
+  });
+}
+
+// -- questions ------------------------------------------------------------------
+
+function faqPage(info: SiteInfo): string {
+  const bodyHtml = `
+  <h2>Questions and answers</h2>
+  ${FAQ.map(([q, a]) => `<div class="faq st"><h3>${esc(q)}</h3><p>${a}</p></div>`).join("\n")}`;
+
+  const faqJsonLd = {
+    "@context": "https://schema.org",
+    "@type": "FAQPage",
+    mainEntity: FAQ.map(([q, a]) => ({
+      "@type": "Question",
+      name: q,
+      acceptedAnswer: {
+        "@type": "Answer",
+        // Schema.org answers are plain prose; strip the inline markup.
+        text: a.replace(/<[^>]+>/g, ""),
+      },
+    })),
+  };
+
+  return guidePage({
+    info,
+    path: "/faq",
+    title: "Google Search Console MCP server: questions and answers",
+    description: "What the Search Console MCP server is, what it can and cannot change, " +
+      "what it stores, whether it shows charts, and what happens when Google's API fails.",
+    kicker: "Questions",
+    h1: "Questions",
+    ledeHtml: "What it is, what it can touch, what it keeps, and what happens when " +
+      "something goes wrong.",
+    bodyHtml,
+    extraJsonLd: [faqJsonLd],
+  });
+}
+
 // -- the registry -------------------------------------------------------------
 
 export interface PublicPage {
@@ -575,12 +755,15 @@ export const PUBLIC_PAGES: PublicPage[] = [
   { path: "/", render: landingPage },
   { path: "/claude", render: claudePage },
   { path: "/claude-code", render: claudeCodePage },
+  { path: "/tools", render: toolsPage },
   ...TOOL_GROUPS.filter((g) => GROUP_COPY[g.path]).map((g) => ({
     path: g.path,
     render: (info: SiteInfo) => toolGroupPage(g, info),
   })),
   { path: "/ai-mode-queries", render: aiModePage },
   { path: "/self-host", render: selfHostPage },
+  { path: "/compare", render: comparePage },
+  { path: "/faq", render: faqPage },
   { path: "/privacy", render: privacyPage },
 ];
 
@@ -666,8 +849,13 @@ export function llmsTxt(info: SiteInfo): string {
     `- [Self-host it](${base}${markdownPathFor("/self-host")}): run locally over stdio or as your own remote server`,
     "",
     "## Tools",
+    `- [All 32 tools](${base}${markdownPathFor("/tools")}): every tool on one page, which ones draw an interactive view, input limits, error behaviour, real output`,
     ...TOOL_GROUPS.map((g) => `- [${g.title}](${base}${markdownPathFor(g.path)}): ${g.tools.map((t) => t.name).join(", ")}`),
     `- Not available on the hosted instance (need write access): ${WRITE_TOOLS.join(", ")}`,
+    "",
+    "## About",
+    `- [How it compares](${base}${markdownPathFor("/compare")}): the questions to ask of any Search Console MCP server, answered for this one`,
+    `- [Questions](${base}${markdownPathFor("/faq")}): what it is, what it can change, what it stores`,
     "",
     "## Policies and source",
     `- [Privacy policy](${base}${markdownPathFor("/privacy")})`,

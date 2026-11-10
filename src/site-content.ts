@@ -62,7 +62,7 @@ export const SELF_HOSTING_DOC_URL =
 
 /** Versioned names: /img/ is served immutable, so a new image ships under a new name. */
 export const ASSETS = {
-  ogImage: "/img/og-card-v1.png",
+  ogImage: "/img/og-card-v2.png",
   icon192: "/img/icon-192-v1.png",
   appleTouchIcon: "/img/apple-touch-icon-v1.png",
   faviconIco: "/img/favicon-v1.ico",
@@ -80,12 +80,26 @@ export interface GuideLink {
 export const GUIDES: GuideLink[] = [
   { path: "/claude", label: "Connect to Claude" },
   { path: "/claude-code", label: "Use it in Claude Code" },
+  { path: "/tools", label: "All 32 tools" },
   { path: "/tools/opportunities", label: "Find opportunities" },
   { path: "/tools/diagnostics", label: "Diagnose drops" },
   { path: "/tools/lookups", label: "Look things up" },
   { path: "/tools/image-search", label: "Image search" },
   { path: "/ai-mode-queries", label: "AI Mode queries" },
   { path: "/self-host", label: "Self-host it" },
+  { path: "/compare", label: "How it compares" },
+  { path: "/faq", label: "Questions" },
+];
+
+/**
+ * The last few releases in one line each, for the landing page. Written from
+ * the changelog, which stays the full record; keep the newest first and drop
+ * the oldest when adding one.
+ */
+export const WHATS_NEW: { version: string; html: string }[] = [
+  { version: "3.11.0", html: "Ten tools draw their result as cards and sortable tables in clients that support MCP Apps, and every analysis tool returns a typed result as well as text." },
+  { version: "3.10.0", html: "The tool list costs a client half as much context, every input is bounded, and a failure on Google's side is retried and then explained in plain words." },
+  { version: "3.9.0", html: "Fixes from a security audit: private data files, a vault key that fails closed, per-message rate limits, and a bounded <span class=\"tool-name\">image_page_audit</span>." },
 ];
 
 // -- tools --------------------------------------------------------------------
@@ -763,6 +777,23 @@ export const FAQ: [string, string][] = [
     "an encrypted refresh token, and your chosen default property.",
   ],
   [
+    "Does it show charts, or only text?",
+    "Both, depending on the client. Ten tools come with an interactive view, " +
+    "cards and sortable tables drawn beside the conversation, in clients that " +
+    "support the MCP Apps extension. Every other client gets the same result as " +
+    "text, and the data Claude reads is identical either way. The " +
+    "<a href=\"/tools\">tool reference</a> lists which tools have a view.",
+  ],
+  [
+    "What happens if Google's API fails, or I ask for too much?",
+    "A read that Google answers with a rate-limit or server error is retried " +
+    "twice before it is reported, and the report says what happened in plain " +
+    "words: no access to that property, quota reached, sign-in revoked, or " +
+    "Google's own outage. Inputs are bounded (a date range is 1 to 480 days, " +
+    "the 16 months Search Console keeps), and a deployment allows 60 requests a " +
+    "minute per person unless its operator changes that.",
+  ],
+  [
     "Is it free, and is it open source?",
     "The software is open source under Apache 2.0 and the hosted instance is " +
     "free to use. You can read exactly what runs here, or run your own copy.",
@@ -787,6 +818,8 @@ export const COMPARISON: [string, string][] = [
     "No. It is fetched live for each question and passed back to your client."],
   ["What do the tools return?",
     "Diagnoses with provenance: every answer names the property, the parameters and the date range. 32 tools; 30 run on the hosted instance."],
+  ["Does it show results visually?",
+    "Ten tools render cards and sortable tables in clients that support MCP Apps; every client gets the same data as text. See <a href=\"/tools\">all tools</a>."],
   ["Does it cover Google Images?",
     "Yes, eight tools on the <code>type=image</code> search type, including an on-page image audit."],
   ["Can it find AI Mode and AI Overview queries?",

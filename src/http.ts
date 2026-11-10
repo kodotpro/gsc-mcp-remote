@@ -423,10 +423,10 @@ export async function startHttpServer(): Promise<HttpServer> {
    *
    * Three exceptions, every one same-origin and none reaching a third party:
    * inline styles, because the CSS is embedded in the documents; `font-src
-   * 'self'` for the two self-hosted web fonts; and `img-src 'self'` for the
+   * 'self'` for the self-hosted web font; and `img-src 'self'` for the
    * wordmark. Serving the fonts from Google Fonts instead would have pulled a
    * third-party origin into the consent flow, which is exactly what this policy
-   * exists to prevent — so they are hosted here and the policy stays
+   * exists to prevent — so it is hosted here and the policy stays
    * first-party throughout.
    *
    * `script-src` is still absent, so it falls back to `default-src 'none'`: no
@@ -493,6 +493,10 @@ export async function startHttpServer(): Promise<HttpServer> {
       }
       res.type(contentType);
       res.setHeader("Cache-Control", "public, max-age=31536000, immutable");
+      // Fonts are fetched in CORS mode whatever the page, and the MCP Apps view
+      // runs in a client's sandboxed iframe, which is a different (opaque)
+      // origin. These are public static files; any origin may read them.
+      if (dir === "fonts") res.setHeader("Access-Control-Allow-Origin", "*");
       res.sendFile(path.join(__dirname, dir, file));
     };
   app.get("/fonts/:file", staticAsset("fonts", FONT_ROUTES));

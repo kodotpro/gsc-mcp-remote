@@ -220,23 +220,28 @@ export function consentPage(p: ConsentPageParams): string {
 <meta name="robots" content="noindex">
 <title>Authorise access</title>
 <style>
- :root{color-scheme:light dark}
- body{font-family:system-ui,-apple-system,"Segoe UI",sans-serif;line-height:1.6;margin:0;
-      background:Canvas;color:CanvasText;display:flex;min-height:100vh;align-items:center;justify-content:center;padding:1.5rem}
- .card{max-width:32rem;width:100%;border:1px solid rgba(128,128,128,.35);border-radius:12px;padding:1.6rem 1.8rem}
- h1{font-size:1.25rem;margin:0 0 .4rem}
+ /* k-o.pro's palette (see web-theme.ts). Styles only: the markup, the form and
+    its fields are untouched. System fonts on purpose; this page loads nothing. */
+ :root{color-scheme:light;--ground:#f2f0eb;--surface:#fbfaf7;--ink:#141412;--text:#3a3832;--muted:#57544c;--line:#1414121f;--line-strong:#14141238;--error:#a23e2a;--error-tint:#f6e1dc}
+ @media (prefers-color-scheme:dark){:root{color-scheme:dark;--ground:#171614;--surface:#1f1e1b;--ink:#f2f0eb;--text:#d9d5cb;--muted:#a8a397;--line:#f2f0eb1f;--line-strong:#f2f0eb38;--error:#e8806d;--error-tint:#3d221c}}
+ body{font-family:ui-sans-serif,system-ui,-apple-system,"Segoe UI",sans-serif;line-height:1.5;margin:0;
+      background:var(--ground);color:var(--text);display:flex;min-height:100vh;align-items:center;justify-content:center;padding:1.5rem}
+ .card{max-width:32rem;width:100%;background:var(--surface);border:1px solid var(--line);border-radius:20px;padding:1.7rem 1.9rem}
+ h1{font-size:1.35rem;font-weight:500;letter-spacing:-.02em;line-height:1.15;color:var(--ink);margin:0 0 .5rem}
  p{margin:0 0 1rem}
- dl{display:grid;grid-template-columns:auto 1fr;gap:.4rem 1rem;margin:1rem 0;font-size:.93rem}
- dt{font-weight:600;opacity:.75}dd{margin:0;word-break:break-all}
- code{font-family:ui-monospace,Menlo,monospace;font-size:.88em}
- .note{font-size:.85em;opacity:.7;word-break:normal}
+ dl{display:grid;grid-template-columns:auto 1fr;gap:.45rem 1rem;margin:1rem 0;font-size:.93rem}
+ dt{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:.72rem;letter-spacing:.04em;text-transform:uppercase;color:var(--muted);padding-top:.2rem}
+ dd{margin:0;word-break:break-all;color:var(--ink)}
+ code{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:.88em}
+ .note{font-size:.85em;color:var(--muted);word-break:normal}
  .warn code{word-break:break-all}
- .warn{border:1px solid #b0402e;background:rgba(176,64,46,.12);border-radius:8px;padding:.8rem 1rem;margin:1rem 0;font-size:.93rem}
+ .warn{border:1px solid var(--error);background:var(--error-tint);color:var(--ink);border-radius:8px;padding:.8rem 1rem;margin:1rem 0;font-size:.93rem}
  .row{display:flex;gap:.7rem;margin-top:1.4rem;flex-wrap:wrap}
- button{font:inherit;padding:.6rem 1.15rem;border-radius:8px;border:1px solid transparent;cursor:pointer}
- .go{background:#17705E;color:#fff}
- .no{background:transparent;border-color:rgba(128,128,128,.45);color:inherit}
- .foot{font-size:.83rem;opacity:.7;margin-top:1.2rem}
+ button{font:inherit;font-weight:500;padding:.65rem 1.3rem;border-radius:999px;border:1px solid transparent;cursor:pointer}
+ .go{background:var(--ink);color:var(--ground);border-color:var(--ink)}
+ .no{background:transparent;border-color:var(--line-strong);color:var(--ink)}
+ button:focus-visible{outline:2px solid var(--ink);outline-offset:2px}
+ .foot{font-size:.83rem;color:var(--muted);margin-top:1.2rem}
 </style></head><body>
 <div class="card">
   <h1>Connect your Google Search Console?</h1>
