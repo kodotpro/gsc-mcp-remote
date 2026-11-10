@@ -59,7 +59,7 @@ export function scopesForTier(tier: ScopeTier): string[] {
   return [
     "https://www.googleapis.com/auth/webmasters.readonly",
     "https://www.googleapis.com/auth/webmasters",
-    // Required for the submit_url / submit_batch tools (Indexing API).
+    // Required for the submit_url tool (Indexing API).
     // Without this scope the token issued by the OAuth flow cannot call
     // indexing.urlNotifications.publish, and submissions fail with
     // "Insufficient Permission" even when the Indexing API is enabled.

@@ -63,8 +63,11 @@ export async function trafficDrops(days: number = 28, siteUrl?: string): Promise
   }
 
   // Also flag pages that existed in prior but have zero/no data in current
+  // A Set, not currentRows.find() per prior page: two 25,000-row periods made
+  // that 625 million comparisons on the shared event loop.
+  const currentPages = new Set(currentRows.map((r) => r.keys[0]));
   for (const [page, prior] of priorMap) {
-    if (!currentRows.find((r) => r.keys[0] === page) && prior.clicks > 5) {
+    if (!currentPages.has(page) && prior.clicks > 5) {
       drops.push({
         page,
         currentClicks: 0,

@@ -252,10 +252,10 @@ Exceeding them returns `429`, or `503` at the server-wide ceiling, with `Retry-A
 
 Two tools behave differently when the server is not on your own machine:
 
-- **`generate_report`** returns markdown inline instead of writing a file, because a file would land on the server's disk where you could not retrieve it. When it does write, paths are confined to `GSC_REPORT_DIR`.
+- **`generate_report`** always returns the markdown in the conversation. A remote server never writes a file (it would land on the server's disk, out of your reach) and ignores `output_path`; a local install saves one only when `output_path` is given, confined to `GSC_REPORT_DIR`.
 - **`image_page_audit`** refuses URLs resolving to private, loopback, link-local or reserved addresses — including the IPv4-mapped IPv6 forms that URL normalisation hides — re-validates the address at connect time so DNS cannot be rebound between check and connect, re-checks every redirect hop, and bounds each fetch with one deadline covering the body plus a byte ceiling.
 
-`submit_url`, `submit_batch` and `submit_sitemap` refuse to run in per-user mode rather than quietly acting as the server's own credential, and refuse in every mode when `GSC_SCOPES` is `readonly`. Unset or empty means `full`; any other value that is not a spelling of read-only is also treated as read-only, with a warning that names the value.
+`submit_url` and `submit_sitemap` refuse to run in per-user mode rather than quietly acting as the server's own credential, and refuse in every mode when `GSC_SCOPES` is `readonly`. Unset or empty means `full`; any other value that is not a spelling of read-only is also treated as read-only, with a warning that names the value.
 
 ---
 
@@ -337,13 +337,14 @@ deployment needs.
 | `GSC_MAX_REGISTERED_CLIENTS` | 10000 | Client registrations kept at once; the oldest never-used are evicted first. `oauth` mode only |
 | `GSC_CONTENT_SIGNAL` | `search=yes, ai-input=yes, ai-train=yes` | What `robots.txt` tells AI systems they may do with the public pages ([Cloudflare's Content-Signal](https://contentsignals.org)): search results, live answers, model training. Only `signal=yes\|no` pairs are accepted; anything else is ignored with a log line |
 | `GSC_GOOGLE_TIMEOUT_MS` | 60000 | Deadline on each Google API call |
+| `GSC_GOOGLE_RETRIES` | 2 | Extra attempts for a read that Google answered with 429 or 5xx (0 to 5). Writes and timeouts are never retried |
 | `GSC_MAX_CONCURRENT_FETCHES` | 3 | Outbound fetches of caller-supplied URLs, process-wide |
 | `GSC_MAX_CONCURRENT_GSC_QUERIES` | 6 | Search Analytics queries in flight, process-wide |
 | `GSC_MAX_IMAGE_BYTES` | 3145728 | Per-image ceiling for `image_page_audit` |
 | `GSC_MAX_PAGE_BYTES` | 2097152 | Per-page ceiling for `image_page_audit` |
 | `GSC_PARSE_TIMEOUT_MS` | 2000 | How long the HTML parser (which runs in a worker thread, capped at 128 MB, two at a time) may take on one page before it is abandoned |
 | `GSC_AUDIT_DEADLINE_MS` | 90000 | After this long, one `image_page_audit` call starts no further page or image fetch (a fetch already running may finish; the call can overrun by up to one fetch's own timeout) |
-| `GSC_REPORT_DIR` | cwd | The only directory `generate_report` may write into |
+| `GSC_REPORT_DIR` | cwd | The only directory `generate_report` may write into (local installs, and only when `output_path` is given) |
 
 ---
 

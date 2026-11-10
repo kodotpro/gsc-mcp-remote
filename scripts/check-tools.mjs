@@ -51,7 +51,7 @@ const NEEDS_SITE_URL = [
 
 // Deliberately property-independent:
 //   multi_site_dashboard takes a site_urls array instead;
-//   submit_url / submit_batch address the Indexing API by URL ownership;
+//   submit_url addresses the Indexing API by URL ownership;
 //   list_properties is the discovery call itself;
 //   image_page_audit fetches pages and never queries Search Console.
 const NO_SITE_URL = [
@@ -59,7 +59,6 @@ const NO_SITE_URL = [
   "export_my_data",
   "multi_site_dashboard",
   "submit_url",
-  "submit_batch",
   "list_properties",
   "image_page_audit",
 ];
@@ -171,7 +170,7 @@ try {
   // gating the second on a person's approval. Tool output carries third-party
   // text, and a model that reads it can be steered toward a state-changing tool;
   // the hint is the part of the defence that does not depend on the model.
-  const CHANGES_STATE = new Set(["submit_url", "submit_batch", "submit_sitemap", "set_default_property", "disconnect_account", "generate_report"]);
+  const CHANGES_STATE = new Set(["submit_url", "submit_sitemap", "set_default_property", "disconnect_account", "generate_report"]);
   const annotationOf = (name) => byName.get(name)?.annotations ?? {};
   for (const t of tools) {
     if (typeof t.annotations?.readOnlyHint !== "boolean") problems.push(`${t.name} declares no readOnlyHint annotation`);
@@ -181,13 +180,13 @@ try {
       problems.push(`${t.name} is not on the state-changing list but is not marked readOnlyHint`);
     }
   }
-  for (const name of ["submit_url", "submit_batch", "set_default_property", "disconnect_account", "submit_sitemap"]) {
+  for (const name of ["submit_url", "set_default_property", "disconnect_account", "submit_sitemap"]) {
     if (annotationOf(name).readOnlyHint !== false) problems.push(`${name} changes state but is not marked readOnlyHint: false`);
   }
   if (annotationOf("generate_report").readOnlyHint !== false) problems.push("generate_report writes a file in stdio mode but is marked read-only");
   if (annotationOf("disconnect_account").destructiveHint !== true) problems.push("disconnect_account erases data but is not marked destructiveHint");
   if (annotationOf("disconnect_account").openWorldHint !== false) problems.push("disconnect_account only touches this server but is not marked closed-world");
-  for (const name of ["submit_url", "submit_batch"]) {
+  for (const name of ["submit_url"]) {
     if (annotationOf(name).destructiveHint !== true) problems.push(`${name} can ask Google to drop a page (URL_DELETED) but is not marked destructiveHint`);
   }
   if (annotationOf("set_default_property").openWorldHint !== true) problems.push("set_default_property asks Google whether the account has the property but is marked closed-world");

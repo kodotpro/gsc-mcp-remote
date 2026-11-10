@@ -117,7 +117,7 @@ async function getServiceAccountClient(): Promise<searchconsole_v1.Searchconsole
   const { keyFile } = getConfig();
 
   // Same scope set as the OAuth flow, including auth/indexing on the full
-  // tier so submit_url / submit_batch work in service-account mode too (#2).
+  // tier so submit_url works in service-account mode too (#2).
   const auth = new google.auth.GoogleAuth({
     keyFile,
     scopes: scopesForTier(getScopeTier()),
@@ -135,7 +135,7 @@ async function getOAuthClient(): Promise<searchconsole_v1.Searchconsole> {
 
 export async function getSearchConsoleClient(): Promise<searchconsole_v1.Searchconsole> {
   // Multi-user (OAuth HTTP) mode: every request carries its user's own client,
-  // so all 33 tools run as the person asking without any of them changing.
+  // so all 32 tools run as the person asking without any of them changing.
   const ctx = getUserContext();
   if (ctx) return ctx.getSearchConsole();
 

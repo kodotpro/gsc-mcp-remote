@@ -58,6 +58,11 @@ jobs:
       - name: Hardening regression tests
         run: node scripts/check-hardening.mjs
 
+      # The numbers: tool output against hand-computed fixtures, through a faked
+      # Search Console client. Also retries, error messages and schema bounds.
+      - name: Analytics correctness tests
+        run: node scripts/check-analytics.mjs
+
       # The tree carries no accepted advisories, so this gates at `high`.
       # It used to sit at `critical` for image-size, which had no fixed release;
       # that dependency is gone — dimensions are read by src/image-dimensions.ts,

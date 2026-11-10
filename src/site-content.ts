@@ -26,7 +26,7 @@ export { SERVER_VERSION };
 export const PRODUCT_NAME = "Google Search Console MCP Server - by k-o.pro (remote)";
 
 /** Bump when page content changes. Feeds dateModified and the sitemap's lastmod. */
-export const SITE_UPDATED = "2026-11-05";
+export const SITE_UPDATED = "2026-11-10";
 
 /** "13 October 2026", for prose. */
 export function humanDate(iso: string): string {
@@ -310,8 +310,8 @@ export const TOOL_GROUPS: ToolGroup[] = [
         what: "A full markdown performance report",
         ask: "Write me a performance report for the last 28 days.",
         detailHtml: "Snapshot, alerts, quick wins, traffic drops, content decay and " +
-          "recommendations in one markdown report. On this hosted instance the report comes " +
-          "back in the conversation rather than being written to the server's disk.",
+          "recommendations in one markdown report, returned in the conversation. A local " +
+          "install can also save it as a file by passing <code>output_path</code>.",
         params: [
           { name: "days", value: "28" },
           { name: "include_sections", value: "all", noteHtml: "any of <code>snapshot</code>, <code>alerts</code>, <code>quick_wins</code>, <code>traffic_drops</code>, <code>content_decay</code>, <code>recommendations</code>" },
@@ -502,12 +502,12 @@ export const TOOL_GROUPS: ToolGroup[] = [
 export const ALL_TOOL_NAMES: string[] = TOOL_GROUPS.flatMap((g) => g.tools.map((t) => t.name));
 
 /** Present in the software, refused on this hosted instance. */
-export const WRITE_TOOLS = ["submit_url", "submit_batch", "submit_sitemap"];
+export const WRITE_TOOLS = ["submit_url", "submit_sitemap"];
 
 /** Tools with no site_url, matching NO_SITE_URL in scripts/check-tools.mjs (which asserts it). */
 export const PROPERTY_INDEPENDENT = [
   "disconnect_account", "export_my_data", "multi_site_dashboard", "submit_url",
-  "submit_batch", "list_properties", "image_page_audit",
+  "list_properties", "image_page_audit",
 ];
 
 // -- real example output ------------------------------------------------------
@@ -786,7 +786,7 @@ export const COMPARISON: [string, string][] = [
   ["Is your Search Console data stored?",
     "No. It is fetched live for each question and passed back to your client."],
   ["What do the tools return?",
-    "Diagnoses with provenance: every answer names the property, the parameters and the date range. 33 tools; 30 run on the hosted instance."],
+    "Diagnoses with provenance: every answer names the property, the parameters and the date range. 32 tools; 30 run on the hosted instance."],
   ["Does it cover Google Images?",
     "Yes, eight tools on the <code>type=image</code> search type, including an on-page image audit."],
   ["Can it find AI Mode and AI Overview queries?",

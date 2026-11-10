@@ -15,7 +15,7 @@
  * (see GOOGLE_SCOPES in auth/google-identity.ts), and `disconnect_account` erases
  * the stored credential rather than flagging it (see provider.disconnectUser).
  * The tool descriptions live in site-content.ts and are the ones registered in
- * server-factory.ts, and the three indexing tools are described as unavailable
+ * server-factory.ts, and the two indexing tools are described as unavailable
  * here because they are — they need a write scope this deployment never
  * requests (see tools/submit-url.ts).
  *
@@ -223,7 +223,7 @@ export function landingPage(info: SiteInfo): string {
     ? `<p>The code that runs here is at
        <a href="${esc(info.repoUrl)}" rel="noopener">${esc(info.repoUrl.replace(/^https?:\/\//, ""))}</a>,
        under Apache 2.0. You can read exactly what this service does, or run your
-       own copy with your own Google credentials — the same 33 tools, over stdio
+       own copy with your own Google credentials — the same 32 tools, over stdio
        or as your own hosted deployment. The <a href="/self-host">self-hosting
        guide</a> walks through both.</p>`
     : `<p>The <a href="/self-host">self-hosting guide</a> covers running your own copy.</p>`;
@@ -253,7 +253,7 @@ export function landingPage(info: SiteInfo): string {
        without exporting a single CSV.</p>
     ${heroCta}
     <ul class="pill-row">
-      <li>33 tools</li>
+      <li>32 tools</li>
       <li>Read-only access</li>
       <li>Every property, one connection</li>
       <li>Open source</li>
@@ -303,12 +303,11 @@ export function landingPage(info: SiteInfo): string {
      provenance every answer carries.</p>
   ${examples}
 
-  <h2>The 33 tools</h2>
+  <h2>The 32 tools</h2>
   <p>Grouped by what you would reach for them to do. Each one takes the property
      as a parameter, so a single connection covers every site in your account.</p>
   ${TOOL_GROUPS.map(toolTable).join("\n")}
-  <p class="note">The three indexing tools — <span class="tool-name">submit_url</span>,
-     <span class="tool-name">submit_batch</span> and
+  <p class="note">The two indexing tools — <span class="tool-name">submit_url</span> and
      <span class="tool-name">submit_sitemap</span> — are part of the software but
      cannot run on this hosted instance: they need write access to your Google
      account, which this service never requests. They work on a
@@ -362,7 +361,7 @@ export function landingPage(info: SiteInfo): string {
 </div>`;
 
   const description =
-    "Connect Google Search Console to Claude by URL: 33 tools for quick wins, " +
+    "Connect Google Search Console to Claude by URL: 32 tools for quick wins, " +
     "traffic drops and AI Mode queries across every property. Read-only, free.";
 
   const jsonLd: unknown[] = [

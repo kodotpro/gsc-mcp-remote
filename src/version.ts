@@ -7,4 +7,4 @@
  * which renders pages straight from dist/. Bump it together with package.json
  * and manifest.json.
  */
-export const SERVER_VERSION = "3.9.0";
+export const SERVER_VERSION = "3.10.0";

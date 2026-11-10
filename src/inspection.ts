@@ -1,4 +1,5 @@
 import { getSearchConsoleClient, resolveSiteUrl } from "./auth.js";
+import { withGoogleRetry } from "./google-errors.js";
 
 export interface InspectionResult {
   indexed: boolean;
@@ -20,12 +21,13 @@ export async function inspectUrl(url: string, siteUrlOverride?: string): Promise
   const client = await getSearchConsoleClient();
   const siteUrl = resolveSiteUrl(siteUrlOverride);
 
-  const response = await client.urlInspection.index.inspect({
+  // A POST, so gaxios does not retry it by itself; it is a read, so we may.
+  const response = await withGoogleRetry(() => client.urlInspection.index.inspect({
     requestBody: {
       inspectionUrl: url,
       siteUrl,
     },
-  });
+  }));
 
   const result = response.data.inspectionResult;
   const indexStatus = result?.indexStatusResult;
