@@ -531,7 +531,7 @@ export function shell(o: ShellOptions): string {
         `<meta property="og:image" content="${esc(origin + ASSETS.ogImage)}">`,
         `<meta property="og:image:width" content="1200">`,
         `<meta property="og:image:height" content="630">`,
-        `<meta property="og:image:alt" content="${esc(PRODUCT_NAME)}: 33 tools, read-only, every property, open source">`,
+        `<meta property="og:image:alt" content="${esc(PRODUCT_NAME)}: 32 tools, read-only, every property, open source">`,
         `<meta name="twitter:card" content="summary_large_image">`,
       ].filter(Boolean).join("")
     : "";

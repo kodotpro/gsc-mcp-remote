@@ -275,7 +275,7 @@ claude mcp remove gsc</code></pre>
      from source and add it over stdio. You need your own Google OAuth client; the
      <a href="/self-host">self-hosting guide</a> covers getting one. Then:</p>
   <pre><code>claude mcp add-json gsc '${esc(localJson)}'</code></pre>
-  <p class="note">Local mode is also the only way to use the three indexing tools,
+  <p class="note">Local mode is also the only way to use the two indexing tools,
      which need <code>GSC_SCOPES=full</code>.</p>`;
 
   return guidePage({
@@ -553,12 +553,12 @@ npm ci && npm run build</code></pre></li>
     info,
     path: "/self-host",
     title: "Self-host the Google Search Console MCP server (open source)",
-    description: "Run the same 33 tools yourself: locally over stdio with your own Google " +
+    description: "Run the same 32 tools yourself: locally over stdio with your own Google " +
       "OAuth client, or as your own remote server with per-user sign-in. Apache 2.0.",
     kicker: "Open source",
     h1: "Self-host the Google Search Console MCP server",
     ledeHtml: "The hosted instance runs the code that is on GitHub. Running your own keeps " +
-      "Google tokens on your hardware, and it is the only way to use the three indexing tools.",
+      "Google tokens on your hardware, and it is the only way to use the two indexing tools.",
     bodyHtml,
   });
 }
@@ -653,7 +653,7 @@ export function llmsTxt(info: SiteInfo): string {
     "",
     "> A hosted, open-source remote MCP server that connects Google Search Console to " +
       "Claude and other MCP clients. Read-only (webmasters.readonly), every property from " +
-      "one connection, and 33 tools that return diagnoses with provenance rather than raw " +
+      "one connection, and 32 tools that return diagnoses with provenance rather than raw " +
       "rows. Free to use; Apache 2.0.",
     "",
     `MCP endpoint: ${info.publicUrl}/mcp (Streamable HTTP, MCP OAuth with dynamic client registration and PKCE).`,

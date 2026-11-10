@@ -447,7 +447,7 @@ console.log("\nWrite tools and the scope tier fail closed");
     const u = await submitUrl("https://example.com/page");
     check("ATTACK: submit_url refuses in service-account mode under GSC_SCOPES=readonly", u.success === false && /read only mode/.test(u.error ?? ""), u.error);
     const b = await submitBatch(["https://example.com/a", "https://example.com/b"]);
-    check("ATTACK: submit_batch refuses every URL under GSC_SCOPES=readonly", b.summary.failed === 2 && b.results.every((r) => /read only mode/.test(r.error ?? "")), JSON.stringify(b.summary));
+    check("ATTACK: submit_url with several URLs refuses every one under GSC_SCOPES=readonly", b.summary.failed === 2 && b.results.every((r) => /read only mode/.test(r.error ?? "")), JSON.stringify(b.summary));
     const sm = await submitSitemap("https://example.com/sitemap.xml", "sc-domain:example.com");
     check("ATTACK: submit_sitemap refuses in service-account mode under GSC_SCOPES=readonly", sm.success === false && /read only mode/.test(sm.error ?? ""), sm.error);
 

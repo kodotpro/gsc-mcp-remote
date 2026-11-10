@@ -27,7 +27,7 @@ Tool reference by group, with parameters and defaults: [opportunities](https://g
 - [Why this one](#why-this-one)
 - [What you can ask](#what-you-can-ask)
 - [**Get connected**](#get-connected)
-- [All 33 tools](#all-33-tools)
+- [All 32 tools](#all-32-tools)
 - [Run it on your own machine](#run-it-on-your-own-machine)
 - [Security and privacy](#security-and-privacy)
 - [Troubleshooting](#troubleshooting)
@@ -106,7 +106,7 @@ Then you are connected. Ask:
 
 and go from there. Google's own Search Console permissions decide what you can see — this server cannot show you a property Google would not, and it never gains write access to anything.
 
-If you would rather your Google token never left your own machine, [run it locally](#run-it-on-your-own-machine) — it is the same 33 tools.
+If you would rather your Google token never left your own machine, [run it locally](#run-it-on-your-own-machine) — it is the same 32 tools.
 
 ### Leaving
 
@@ -119,9 +119,9 @@ Two ways, either is enough:
 
 ---
 
-## All 33 tools
+## All 32 tools
 
-Thirty-three SEO analysis tools, grouped by what you would reach for them to do.
+Thirty-two SEO analysis tools, grouped by what you would reach for them to do.
 
 Tools marked **P** take an optional `site_url` to target any property your credential can see. 26 do; 7 are property-independent by design.
 
@@ -155,7 +155,7 @@ The core SEO workflows — each returns a diagnosis rather than a table.
 | `content_recommendations` | Prioritised update / create / consolidate actions | P |
 | `advanced_search_analytics` | Custom queries with arbitrary dimensions and filters | P |
 | `verify_claim` | Checks a numeric claim against live data before you state it | P |
-| `generate_report` | Full markdown performance report | P |
+| `generate_report` | Full markdown performance report, returned in the conversation | P |
 | `inspect_url` | Whether a URL is indexed, and why or why not | P |
 | `genai_conversation_queries` | AI-conversation artefacts hiding in your query data | P |
 
@@ -181,10 +181,9 @@ These change something in Google, so they require `GSC_SCOPES=full` and are unav
 | Tool | What it does | P |
 |------|--------------|---|
 | `submit_sitemap` | Notify Google of a new or updated sitemap | P |
-| `submit_url` | Submit one URL to the Indexing API | |
-| `submit_batch` | Submit up to 200 URLs at once | |
+| `submit_url` | Submit one URL, or up to 200, to the Indexing API | |
 
-`submit_url` and `submit_batch` take no `site_url` because the Indexing API addresses URLs by ownership, not by property. `image_page_audit` takes none because it fetches pages rather than querying Search Console.
+`submit_url` takes no `site_url` because the Indexing API addresses URLs by ownership, not by property. `image_page_audit` takes none because it fetches pages rather than querying Search Console.
 
 ### Working across properties
 
@@ -206,7 +205,7 @@ Tool descriptions instruct the model to base analysis only on returned data, and
 
 Everything above works without installing anything. But this is open source, and there are two good reasons to run it yourself: your Google token never leaves your machine, and local mode is the only mode with the **write tools** (sitemap submission and the Indexing API), which the hosted service deliberately does not offer.
 
-Same 33 tools, running over stdio.
+Same 32 tools, running over stdio.
 
 **1. Clone and build.** Not published to npm yet, so install from source:
 
@@ -326,6 +325,7 @@ npm test
 | `check-markdown.mjs` | Every public page's Markdown form against its HTML (headings, code blocks, table rows, links, and no lost words), the `Accept` negotiation rules row by row, `llms-full.txt`, and `robots.txt`'s Content-Signal |
 | `check-http.mjs` | Health, token enforcement, sessions, the capacity limits and their `Retry-After`, the idle sweeper, the public pages and their anti-framing headers, that every self-hosted font the pages reference is actually served from `dist/`, and that every registered page is served, linked internally without a 404, listed in the sitemap and `/llms.txt`, and reachable at one URL only, plus the Markdown routes and the headers that go with them (`Vary: Accept`, `Link`, 406) |
 | `check-oauth.mjs` | The sandwich, PKCE, single-use codes, refresh rotation and reuse-burning, audience binding, the revocation cascade, DCR, cross-user session rejection, and that `disconnect_account` leaves no row anywhere |
+| `check-analytics.mjs` | The numbers: ten tools fed fixtures through a faked Search Console client and compared with hand-computed values; pagination and the row ceiling; retries of Google's transient failures; the plain-language error messages; every schema bound; the size of `tools/list` |
 | `check-hardening.mjs` | SSRF classification across 34 address forms, fetch deadlines and byte caps against a hostile server, redirect re-validation, report-path confinement, image format gating |
 
 Every check in the hardening suite failed before its fix landed.
@@ -380,6 +380,20 @@ Not affiliated with or endorsed by Google or Anthropic. "Google" and "Google Sea
 ---
 
 ## Changelog
+
+**v3.10.0** — The tools themselves: what they cost a client, what they accept, and whether their numbers are right. A review of v3.9.0 found the server well defended and the analysis logic untested, with a tool list that cost every conversation about 15,000 tokens before a question was asked.
+
+**`tools/list` is half the size.** Three paragraphs of shared guidance (accuracy, how to read position, presentation) were pasted onto the end of all but one tool description, and several descriptions ran past 1,500 characters. The guidance is now sent once, as the server's `instructions`, and descriptions are capped at 600 characters: 59.6 KB down to under 32 KB. Every result still carries the accuracy note and the untrusted-text notice in `_meta`, for clients that do not show `instructions` to their model. Results are compact JSON instead of indented.
+
+**Inputs are bounded and typed.** 49 of 52 numeric parameters were a bare number: `days: -5` gave an inverted date range and `days: 1e9` an "Invalid time value" crash. Every number now declares a range (`days` is 1 to 480, the 16 months Search Console keeps), every string a maximum length, every array a maximum size, and `dimensions`, filter `operator`, `order_by`, `order_direction` and `include_sections` are enumerations instead of free text. `row_limit` said "max 500" but was only clamped silently; it is now refused above 500. A bad value is refused with the limit named, before any call to Google.
+
+**Google's failures are retried and explained.** `searchanalytics.query` and URL inspection are POSTs, which the Google client never retries, so one 429 or 503 failed a whole tool call (and `generate_report`, which makes about ten). Both are reads and are now retried up to twice with jittered backoff (`GSC_GOOGLE_RETRIES`, default 2); writes are never retried, and neither is a timeout. A failure that survives comes back as one sentence a person can act on: no access to that property (call `list_properties`), quota reached (wait), sign-in revoked (reconnect), Google's outage (retry shortly), instead of Google's raw text.
+
+**BREAKING: `submit_batch` is gone.** `submit_url` now takes `urls`, a list of 1 to 200, instead of a single `url`. Two tools for one action cost every client a second schema and gave the model two names to choose between. Local installs only, as before.
+
+**`generate_report` behaves the same everywhere.** On the hosted server it returned the markdown; on a local install it returned only a path, and wrote `./gsc-report-<date>.md` into whatever directory the process started in, asked or not. It now always returns the report, and saves a file only on a local install when `output_path` is given. Its footer also claimed "v2.0.0"; it now prints the real version.
+
+**The numbers are tested.** `scripts/check-analytics.mjs` feeds fixtures through a faked Search Console client and compares ten tools' output with values worked out by hand: opportunity estimates, benchmark gaps, impression-weighted position, the three drop diagnoses, cannibalisation grouping, three-window decay, alert severities and ordering, plus pagination, the row ceiling, retries, error messages, every schema bound and the `tools/list` size. Fourteen deliberate regressions were introduced to check the checks; thirteen were caught and the fourteenth got a fixture. Writing them found one real defect: `traffic_drops` looked up every prior page with a linear scan, 625 million comparisons on the shared event loop for a large property (1.5 s, now 13 ms).
 
 **v3.9.0** — Fixes from a source-only security audit of v3.8.0 (Cloudflare's `security-audit` skill, standard profile: reconnaissance, 22 hunters over 33 coverage units, independent verification of every candidate). The audit could not execute anything, so its findings were leads rather than proven bugs; where a fix was cheap and the lead credible, it is fixed here and the test asserts the *attack fails*, not that a mechanism exists. A live check also found the database files world-readable on the reference deployment, which the audit's file-mode lead had flagged. The branch was then reviewed by four independent adversarial reviewers and mutation-tested (each bug reintroduced to confirm a test fails); both found real problems in the first version of these fixes, listed under "Corrected before release" below.
 

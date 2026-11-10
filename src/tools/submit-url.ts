@@ -93,10 +93,19 @@ export async function submitUrl(
   }
 }
 
+/**
+ * Submits one URL or many. This is what the single `submit_url` tool calls:
+ * there used to be a second tool, `submit_batch`, that differed only in taking
+ * an array, which cost every client a second schema to carry and gave the model
+ * two names to choose between for one action.
+ */
 export async function submitBatch(
   urls: string[],
   action: "URL_UPDATED" | "URL_DELETED" = "URL_UPDATED"
 ): Promise<{ results: SubmitResult[]; summary: { total: number; succeeded: number; failed: number; note: string } }> {
+  if (urls.length === 0) {
+    throw new Error("No URLs were given. Pass at least one URL in `urls`.");
+  }
   if (urls.length > 200) {
     throw new Error(
       `Google's Indexing API has a daily quota of 200 requests. You provided ${urls.length} URLs. Please reduce to 200 or fewer.`

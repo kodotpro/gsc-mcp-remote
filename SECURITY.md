@@ -114,7 +114,7 @@ failure rather than a surprise:
   file's own magic bytes declare rather than a server-supplied Content-Type
 - Per-user mode requests `webmasters.readonly` for Search Console data, plus
   `openid` and `email` solely to identify the account; the write tools
-  (`submit_url`, `submit_batch`, `submit_sitemap`) refuse to run in it, and
+  (`submit_url`, `submit_sitemap`) refuse to run in it, and
   `GSC_SCOPES` fails closed: unset or empty means `full`, and any other value
   that is not a spelling of read-only is read-only too, with a warning
 - The per-user request budget counts JSON-RPC messages and applies to every

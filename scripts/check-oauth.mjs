@@ -958,7 +958,7 @@ try {
   await rpc(TOKEN_A, sidA, { jsonrpc: "2.0", method: "notifications/initialized" });
 
   const listA = await (await rpc(TOKEN_A, sidA, { jsonrpc: "2.0", id: 2, method: "tools/list" })).json();
-  check("user A sees the full tool set", listA?.result?.tools?.length === 33, `got ${listA?.result?.tools?.length}`);
+  check("user A sees the full tool set", listA?.result?.tools?.length === 32, `got ${listA?.result?.tools?.length}`);
 
   // Invariant #1: a session opened by A must reject B's valid token.
   const crossed = await rpc(TOKEN_B, sidA, { jsonrpc: "2.0", id: 3, method: "tools/list" });
