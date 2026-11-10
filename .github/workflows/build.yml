@@ -63,6 +63,11 @@ jobs:
       - name: Analytics correctness tests
         run: node scripts/check-analytics.mjs
 
+      # The MCP Apps view: runs the script a client would run, in a fake DOM
+      # with a fake host, including hostile text in every position.
+      - name: MCP Apps view tests
+        run: node scripts/check-apps.mjs
+
       # The tree carries no accepted advisories, so this gates at `high`.
       # It used to sit at `critical` for image-size, which had no fixed release;
       # that dependency is gone — dimensions are read by src/image-dimensions.ts,

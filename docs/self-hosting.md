@@ -252,6 +252,7 @@ Exceeding them returns `429`, or `503` at the server-wide ceiling, with `Retry-A
 
 Two tools behave differently when the server is not on your own machine:
 
+- **Interactive views (MCP Apps).** Ten read-only tools name a `ui://` view that supporting clients render in a sandboxed frame. With `GSC_PUBLIC_URL` set to an https origin the view loads one font from `/fonts` on that origin (served with `Access-Control-Allow-Origin: *`) and asks the client's sandbox for that origin only; otherwise it loads nothing and uses the system font.
 - **`generate_report`** always returns the markdown in the conversation. A remote server never writes a file (it would land on the server's disk, out of your reach) and ignores `output_path`; a local install saves one only when `output_path` is given, confined to `GSC_REPORT_DIR`.
 - **`image_page_audit`** refuses URLs resolving to private, loopback, link-local or reserved addresses — including the IPv4-mapped IPv6 forms that URL normalisation hides — re-validates the address at connect time so DNS cannot be rebound between check and connect, re-checks every redirect hop, and bounds each fetch with one deadline covering the body plus a byte ceiling.
 

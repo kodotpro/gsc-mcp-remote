@@ -40,6 +40,8 @@ const { submitBatch } = await import("../dist/tools/submit-url.js");
 const { explainGoogleError, isRetryableGoogleError, withGoogleRetry } = await import("../dist/google-errors.js");
 const { setRemoteMode } = await import("../dist/runtime.js");
 const { SERVER_VERSION } = await import("../dist/version.js");
+const { outputShapeFor, TOOLS_WITH_OUTPUT_SCHEMA } = await import("../dist/output-schemas.js");
+const { z } = await import("zod");
 const { createServer } = await import("../dist/server-factory.js");
 const { Client } = await import("@modelcontextprotocol/sdk/client/index.js");
 const { InMemoryTransport } = await import("@modelcontextprotocol/sdk/inMemory.js");
@@ -470,7 +472,9 @@ console.log("Over MCP: schemas, messages and the cost of tools/list");
     const bytes = JSON.stringify(tools).length;
     // It was 59,592 bytes (about 15,000 tokens) with the shared guidance pasted
     // onto every description. This ceiling keeps it from creeping back.
-    check("tools/list stays under 32 KB", bytes < 32_000, `${bytes} bytes`);
+    // 31 KB of names, descriptions and input schemas; about 1 KB naming the MCP
+    // Apps view on ten tools; about 9.5 KB for those ten tools' output schemas.
+    check("tools/list stays under 42.5 KB", bytes < 42_500, `${bytes} bytes`);
     const longest = tools.map((t) => [t.description.length, t.name]).sort((a, b) => b[0] - a[0])[0];
     check("no tool description runs past 600 characters", longest[0] <= 600, `${longest[1]}: ${longest[0]}`);
     check("the shared guidance is no longer repeated in any description",
@@ -488,6 +492,73 @@ console.log("Over MCP: schemas, messages and the cost of tools/list");
     }
     check("every numeric, string and array input declares its limits", loose.length === 0, loose.join(", "));
   });
+}
+
+// ---------------------------------------------------------------------------
+console.log("Structured output");
+{
+  // One responder that gives every tool something to report: rows shaped by the
+  // dimensions asked for, with fewer clicks the more recent the period.
+  const respond = (b) => {
+    const age = ageDays(b.startDate);
+    const clicks = age <= 45 ? 30 : age <= 75 ? 60 : 100;
+    const dims = JSON.stringify(b.dimensions);
+    if (dims === '["date"]') return [row("2026-01-02", clicks, 4000, clicks / 4000, 6)];
+    if (dims === '["query"]') return [row("a query", clicks, 4000, 0.01, 6), row("a far query", 1, 900, 0.001, 40)];
+    if (dims === '["page"]') return [row("https://example.com/a/", clicks, 4000, 0.01, 6)];
+    if (dims === '["query","page"]') return [row(["q", "https://example.com/a/"], clicks, 4000, 0.01, 6), row(["q", "https://example.com/b/"], 2, 500, 0.004, 9)];
+    return [];
+  };
+  const ARGS = {
+    multi_site_dashboard: { site_urls: [SITE] },
+    check_alerts: { site_url: SITE, days: 28, click_drop_threshold: 10 },
+  };
+  const { ctx } = fakeContext(respond);
+  const server = createServer();
+  const [clientSide, serverSide] = InMemoryTransport.createLinkedPair();
+  await server.connect(serverSide);
+  const client = new Client({ name: "check-analytics", version: "1" });
+  await client.connect(clientSide);
+  try {
+    await runWithUserContext(ctx, async () => {
+      const { tools } = await client.listTools();
+      const declared = tools.filter((t) => t.outputSchema).map((t) => t.name).sort();
+      check("ten tools declare an output schema", same(declared, [...TOOLS_WITH_OUTPUT_SCHEMA].sort()) && declared.length === 10, declared.join(", "));
+      for (const name of TOOLS_WITH_OUTPUT_SCHEMA) {
+        let r, threw = null;
+        // The server validates the result against the declared schema, and so
+        // does this client: a schema that did not match what the tool really
+        // returns would surface here as an error, twice over.
+        try { r = await client.callTool({ name, arguments: ARGS[name] ?? { site_url: SITE } }); } catch (e) { threw = e; }
+        const text = r?.content?.[0]?.text ?? "";
+        const data = r?.structuredContent?.data;
+        const rows = Array.isArray(data) ? data.length : (data?.alerts?.length ?? data?.sites?.length ?? (data?.current ? 1 : 0));
+        check(`${name}: a real result satisfies its declared schema`, !threw && r?.isError !== true && rows > 0, String(threw?.message ?? text).slice(0, 200));
+        check(`${name}: the structured result is exactly the text result`, !threw && same(r.structuredContent, JSON.parse(text)));
+      }
+      const plain = await client.callTool({ name: "list_properties", arguments: {} });
+      check("a tool without a declared schema still returns its result as an object too",
+        plain.structuredContent?._meta?.tool === "list_properties" && same(plain.structuredContent, JSON.parse(plain.content[0].text)));
+    });
+    const failing = fakeContext(() => { throw googleError(403, "User does not have sufficient permission for site", "forbidden"); });
+    await runWithUserContext(failing.ctx, async () => {
+      const r = await client.callTool({ name: "quick_wins", arguments: { site_url: SITE } });
+      check("an error from a tool with a schema is still the readable error, not a schema complaint",
+        r.isError === true && /does not have access/.test(r.content[0].text) && !/Output validation/.test(r.content[0].text), r.content?.[0]?.text?.slice(0, 160));
+    });
+  } finally {
+    await client.close();
+    await server.close();
+  }
+
+  const schema = z.object(outputShapeFor("quick_wins"));
+  const good = { query: "q", clicks: 1, impressions: 2, ctr: 3, position: 4, opportunity: 5 };
+  check("a number that JSON turned into null (NaN upstream) does not fail the whole result",
+    schema.safeParse({ _meta: {}, data: [{ ...good, position: null }] }).success);
+  check("a field the schema does not know is allowed", schema.safeParse({ _meta: {}, data: [{ ...good, extra: true }] }).success);
+  check("...but a wrong type is refused", !schema.safeParse({ _meta: {}, data: [{ ...good, clicks: "many" }] }).success);
+  check("...and so is a missing field", !schema.safeParse({ _meta: {}, data: [{ query: "q" }] }).success);
+  check("a tool named like an inherited property has no schema", outputShapeFor("constructor") === undefined && outputShapeFor("__proto__") === undefined);
 }
 
 // ---------------------------------------------------------------------------

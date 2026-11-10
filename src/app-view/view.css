@@ -1,0 +1,100 @@
+/*
+ * The look of k-o.pro, carried into the MCP Apps view: its warm paper palette,
+ * hairline borders, 8px tiles inside a 20px figure, mint accent, and monospace
+ * pills and labels. Token names and values are k-o.pro's own (--color-ground,
+ * --color-ink, --color-accent ...), shortened.
+ *
+ * k-o.pro has no dark theme. The dark values below are derived from the same
+ * hues (its dark "panel" colours and the same mint), because a host in dark
+ * mode would otherwise get a bright paper card in the middle of the chat.
+ */
+:root{
+ --ground:#f2f0eb; --surface:#fbfaf7; --raised:#edeae2;
+ --ink:#141412; --text:#3a3832; --muted:#57544c;
+ --line:#1414121f; --line-soft:#14141214; --line-strong:#14141238;
+ --accent:#5fe3a1; --accent-ink:#367152; --accent-tint:#d9f5e4;
+ --warn:#8a5a10; --warn-tint:#f4e7cf;
+ --error:#a23e2a; --error-tint:#f6e1dc;
+ --radius-tile:8px; --radius-figure:20px;
+ --sans:"Host Grotesk","Host Grotesk Fallback",ui-sans-serif,system-ui,-apple-system,"Segoe UI",sans-serif;
+ --mono:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
+ color-scheme:light;
+}
+:root[data-theme=dark]{
+ --ground:#171614; --surface:#1f1e1b; --raised:#2a2925;
+ --ink:#f2f0eb; --text:#d9d5cb; --muted:#a8a397;
+ --line:#f2f0eb1f; --line-soft:#f2f0eb14; --line-strong:#f2f0eb38;
+ --accent-ink:#5fe3a1; --accent-tint:#1f3a2c;
+ --warn:#e0b25a; --warn-tint:#3a2f17;
+ --error:#e8806d; --error-tint:#3d221c;
+ color-scheme:dark;
+}
+@font-face{font-family:"Host Grotesk Fallback";src:local(Arial);
+ ascent-override:96.69%;descent-override:30.01%;line-gap-override:0%;size-adjust:104.98%}
+
+*{box-sizing:border-box}
+html,body{margin:0;background:transparent}
+body{font-family:var(--sans);color:var(--text);font-size:14px;line-height:1.45;
+ -webkit-font-smoothing:antialiased;-moz-osx-font-smoothing:grayscale}
+#app{background:var(--ground);border:1px solid var(--line);border-radius:var(--radius-figure);
+ padding:20px;overflow:hidden}
+
+.eyebrow{font-family:var(--mono);font-size:11px;letter-spacing:.06em;text-transform:uppercase;
+ color:var(--muted);margin:0 0 6px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+h1{font-size:22px;line-height:1.15;font-weight:500;letter-spacing:-.01em;color:var(--ink);margin:0}
+.sub{color:var(--muted);margin:4px 0 0}
+header{margin-bottom:16px}
+
+.cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(132px,1fr));gap:8px;margin-bottom:12px}
+.card{background:var(--surface);border:1px solid var(--line);border-radius:var(--radius-tile);padding:12px 14px;min-width:0}
+.card .k{font-family:var(--mono);font-size:11px;letter-spacing:.04em;text-transform:uppercase;color:var(--muted)}
+.card .v{font-size:26px;line-height:1.15;font-weight:500;color:var(--ink);margin-top:6px;
+ font-variant-numeric:tabular-nums;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.card .d{font-family:var(--mono);font-size:12px;margin-top:4px;color:var(--muted)}
+
+.good,.card .d.good{color:var(--accent-ink)}
+.bad,.card .d.bad{color:var(--error)}
+
+.tile{background:var(--surface);border:1px solid var(--line);border-radius:var(--radius-tile);overflow-x:auto}
+table{width:100%;border-collapse:collapse;font-variant-numeric:tabular-nums}
+th,td{padding:9px 12px;text-align:left;border-bottom:1px solid var(--line-soft);vertical-align:middle}
+tbody tr:last-child td{border-bottom:0}
+th{font-family:var(--mono);font-size:11px;font-weight:400;letter-spacing:.04em;text-transform:uppercase;
+ color:var(--muted);white-space:nowrap;border-bottom:1px solid var(--line);background:var(--surface);
+ cursor:pointer;user-select:none}
+th:focus-visible,button:focus-visible{outline:2px solid var(--accent-ink);outline-offset:-2px}
+th[aria-sort=ascending]::after{content:" \2191"}
+th[aria-sort=descending]::after{content:" \2193"}
+td.n,th.n{text-align:right;white-space:nowrap}
+td.t{max-width:320px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--ink)}
+tr.group td{background:var(--raised);color:var(--ink);font-weight:500}
+tr.child td.t{padding-left:26px;color:var(--text)}
+
+.bar{display:inline-block;vertical-align:middle;width:56px;height:6px;margin-left:8px;
+ background:var(--line-soft);border-radius:999px;overflow:hidden}
+.bar i{display:block;height:100%;background:var(--accent);border-radius:999px}
+.bar.neg i{background:var(--error)}
+
+.pill{display:inline-flex;align-items:center;min-height:24px;padding:0 10px;border-radius:999px;
+ font-family:var(--mono);font-size:12px;white-space:nowrap;
+ color:var(--text);background:var(--ground);border:1px solid var(--line)}
+.pill.ok{color:var(--accent-ink);background:var(--accent-tint);border-color:transparent}
+.pill.warn{color:var(--warn);background:var(--warn-tint);border-color:transparent}
+.pill.err{color:var(--error);background:var(--error-tint);border-color:transparent}
+
+.more{display:block;width:100%;margin:0;padding:10px 12px;border:0;border-top:1px solid var(--line);
+ background:var(--surface);color:var(--ink);font:inherit;font-family:var(--mono);font-size:12px;cursor:pointer;text-align:center}
+.more:hover{background:var(--raised)}
+
+.state{margin:0;padding:18px 4px;color:var(--muted)}
+.state.err{color:var(--error)}
+footer{margin-top:12px;font-family:var(--mono);font-size:11px;color:var(--muted)}
+
+@media (max-width:520px){
+ #app{padding:14px;border-radius:14px}
+ h1{font-size:19px}
+ .card .v{font-size:22px}
+ td.t{max-width:180px}
+ .bar{display:none}
+}
+@media (prefers-reduced-motion:no-preference){.bar i{transition:width .35s cubic-bezier(.2,.7,.2,1)}}
